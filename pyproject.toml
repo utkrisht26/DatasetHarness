@@ -1,0 +1,54 @@
+[project]
+name = "adh"
+version = "0.1.0"
+description = "Agentic Dataset Generation Harness — Engine A (Discovery + Acquisition)"
+requires-python = ">=3.11"
+readme = "README.md"
+authors = [{ name = "Brilo", email = "uttkrisht@brilo.ai" }]
+# Core deps are intentionally light. The reuse-libraries (Crawl4AI, deepagents,
+# huggingface_hub, langchain-mcp-adapters) are OPTIONAL extras, imported lazily
+# behind adapters so the harness runs and is fully testable without them.
+dependencies = [
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "jsonschema>=4.20",
+]
+
+[project.optional-dependencies]
+# `web` channel — Crawl4AI crawl + adaptive saturation (Phase 1.1/1.4)
+web = ["crawl4ai>=0.8"]
+# `datasets` channel — existing-dataset discovery + reuse (Phase 1.6)
+datasets = ["huggingface_hub>=0.36"]
+# deepagents research loop + MCP tool loading (Phase 1.0/1.2)
+agents = [
+    "deepagents>=0.6",
+    "langchain-mcp-adapters>=0.1",
+    "langchain-anthropic>=0.3",
+]
+all = ["adh[web,datasets,agents]"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+adh = "adh.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.8.10,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.coverage.run]
+branch = true
+source = ["adh"]

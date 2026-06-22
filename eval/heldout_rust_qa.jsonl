@@ -1,0 +1,2 @@
+{"input": "What does the pin_project macro guarantee for self-referential async state machines?", "output": "It generates structural pinning projections so fields can be safely accessed as Pin<&mut Field> without unsafe, upholding the Pin invariants for the !Unpin parts of the future."}
+{"input": "Why can a declarative macro_rules! macro not directly count its repetitions?", "output": "macro_rules! has no arithmetic; counting is done by recursive expansion or by mapping each repetition to a unit and summing via a helper like a tt-muncher or const expression."}

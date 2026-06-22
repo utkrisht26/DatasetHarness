@@ -1,0 +1,54 @@
+# Example B from GOAL.md, expressed as a full Job Spec (PHASE0-CONTRACT.md §0.3.1).
+# "Build me a dataset to teach idiomatic advanced Rust async macro patterns."
+# Note: NO sources are supplied — discovery.mode=auto finds them.
+
+name:              "rust-async-macro-patterns"
+description:       "Q/A pairs on advanced Rust async macro design (declarative + procedural)."
+motivation:        "SFT data to teach a model idiomatic async macro patterns."
+intended_uses:     ["supervised-fine-tuning"]
+out_of_scope_uses: ["safety evaluation", "factual benchmark"]
+
+verifiability_tier: 2                 # soft
+task_categories:   ["question-answering", "text-generation"]
+languages:         ["en"]
+modality:          "text"
+target_size:       { records: 25000 }
+record_schema_ref: "./schemas/qa_record.schema.json"
+
+discovery:
+  mode:           "auto"
+  seeds:          []                  # none — the system discovers sources
+  approval_gate:  true
+  channels:       ["datasets", "web", "synthesis"]
+  constraints:
+    include_domains: []
+    exclude_domains: ["reddit.com"]
+    recency_after:   "2022-01-01"
+    respect_robots_txt: true
+allowed_licenses:  ["CC-BY-4.0", "CC0-1.0", "MIT", "Apache-2.0", "public-domain"]
+pii_policy:        "redact"
+
+generator_models:  ["anthropic:claude-haiku-4-5", "qwen2.5-coder:32b-vllm"]
+judge_config:
+  models:          ["anthropic:claude-sonnet-4-6", "openai:gpt-judge"]
+  rubric_ref:      "./rubrics/qa_helpfulness.md"
+  min_score:       3.5
+  position_swap:   true
+generation_params: { temperature: 0.7, top_p: 1.0, max_tokens: 1024, seed: 42 }
+diversity_strategy: "persona+evol"
+dedup_policy:      { method: "minhash", ngram: 5, jaccard: 0.8, scope: "per-shard" }
+decontaminate_against: ["./eval/heldout_rust_qa.jsonl"]
+
+output_format:     "parquet"
+splits:            { train: 0.9, validation: 0.05, test: 0.05 }
+output_license:    "CC-BY-4.0"
+distribution_target: "hf://my-org/rust-async-macro-patterns"
+maintainer:        "uttkrisht@brilo.ai"
+emit_datasheet:    true
+
+limits:
+  max_pages_scraped: 5000
+  max_llm_tokens:    50000000
+  max_storage_mb:    20000
+  max_runtime_seconds: 28800
+  max_cost_usd:      150
