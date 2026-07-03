@@ -430,7 +430,7 @@ def create_app(
     if os.path.exists(frontend_dist):
         app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist, "assets")), name="assets")
 
-        @app.get("/{catchall:path}")
+        @app.get("/{catchall:path}", include_in_schema=False)
         def serve_spa(catchall: str):
             if catchall.startswith(("api/", "api", "docs", "openapi.json", "healthz", "usage")):
                 raise HTTPException(status_code=404, detail="Not Found")
