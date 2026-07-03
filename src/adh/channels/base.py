@@ -21,6 +21,35 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+@runtime_checkable
+class CrawlGovernor(Protocol):
+    """The coverage "Brain" a channel consults while acquiring (design-doc §2).
+
+    The agent owns saturation; the channel only reports what it sees
+    (:meth:`observe`) and asks whether to keep going (:meth:`should_stop`). This is
+    the decoupled STOP signal: novelty detection stays in the orchestrator, never
+    in the crawler (design-doc review goal #1).
+    """
+
+    def observe(self, aspect_id: str, text: str) -> None:
+        """Record one acquired unit of content toward an aspect's coverage."""
+        ...
+
+    def should_stop(self, aspect_id: str) -> bool:
+        """Return True once ``aspect_id`` is saturated (stop / flush its frontier)."""
+        ...
+
+
+class NullGovernor:
+    """Default no-op governor: observe nothing, never stop (offline/tests)."""
+
+    def observe(self, aspect_id: str, text: str) -> None:  # noqa: D401 - no-op
+        return None
+
+    def should_stop(self, aspect_id: str) -> bool:
+        return False
+
+
 @dataclass(frozen=True)
 class FetchContext:
     """Everything a channel needs to fetch + offload one source."""
@@ -30,6 +59,10 @@ class FetchContext:
     spec: JobSpec
     max_items_per_source: int = 50
     clock: Callable[[], datetime] = field(default=_utcnow)
+    # The coverage Brain. Channels report acquired content and may flush their
+    # frontier when it says the aspect is saturated. Defaults to a no-op so
+    # offline channels and existing callers are unaffected.
+    governor: CrawlGovernor = field(default_factory=NullGovernor)
 
 
 @runtime_checkable

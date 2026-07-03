@@ -97,13 +97,21 @@ def _cmd_run(args: argparse.Namespace) -> int:
         approver = AutoApprover()
 
     channels = {} if args.no_fetch else _build_live_channels()
-    result = run_engine_a(
-        spec,
-        work_dir=work_dir,
-        approver=approver,
-        channels=channels,
-        resume=not args.fresh,
-    )
+    try:
+        result = run_engine_a(
+            spec,
+            work_dir=work_dir,
+            approver=approver,
+            channels=channels,
+            resume=not args.fresh,
+        )
+    finally:
+        # We created the live channels here, so we tear down their browsers here
+        # (the web channel owns a background event loop + AsyncWebCrawler).
+        for channel in channels.values():
+            close = getattr(channel, "close", None)
+            if callable(close):
+                close()
     print(f"\nEngine A finished: exit_reason={result.exit_reason!r}")
     print(f"  corpus chunks:      {result.n_chunks}")
     print(f"  synthesis handoffs: {result.n_handoffs}")
@@ -111,6 +119,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
     print(f"  manifest:           {result.manifest_path}")
     print(f"  lineage:            {result.lineage_path}")
     print(f"  summary:            {result.summary_path}")
+    return 0
+
+
+def _cmd_crawl_serve(args: argparse.Namespace) -> int:
+    """Run the crawl microservice (the web channel behind an HTTP boundary)."""
+    try:
+        import uvicorn
+
+        from adh.channels.web.app import create_app
+    except ImportError as exc:  # pragma: no cover - needs the serve extra
+        print(f"[adh] crawl service needs the serve extra: pip install 'adh[serve]' ({exc})",
+              file=sys.stderr)
+        return 1
+    uvicorn.run(create_app(), host=args.host, port=args.port)
     return 0
 
 
@@ -138,6 +160,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="discovery + approval only; configure no acquisition channels",
     )
     p_run.set_defaults(func=_cmd_run)
+
+    p_serve = sub.add_parser("crawl-serve", help="run the crawl microservice (adh[serve])")
+    p_serve.add_argument("--host", default="127.0.0.1")
+    p_serve.add_argument("--port", type=int, default=8000)
+    p_serve.set_defaults(func=_cmd_crawl_serve)
     return parser
 
 

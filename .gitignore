@@ -84,3 +84,5 @@ Thumbs.db
 
 # Project specific
 .gstack/
+docs/design/
+runs/*

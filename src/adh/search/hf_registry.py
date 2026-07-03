@@ -47,7 +47,7 @@ class HfDatasetRegistry:
 
     def search(self, query: str, *, limit: int = 10) -> list[DatasetHit]:
         api = self._client()
-        results = api.list_datasets(search=query, limit=limit, sort="downloads", direction=-1)
+        results = api.list_datasets(search=query, limit=limit, sort="downloads")
         hits: list[DatasetHit] = []
         for ds in results:
             ds_id = getattr(ds, "id", None) or getattr(ds, "id_or_path", "")

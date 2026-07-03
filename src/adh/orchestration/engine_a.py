@@ -113,8 +113,10 @@ def run_engine_a(
     # ---- acquisition ----
     metrics = state.metrics
     start = clock_seconds()
-    saturation: dict[str, SaturationTracker] = {}
-    saturated_aspects: set[str] = set()
+    # Coverage "Brain": channels report acquired content here; it owns the
+    # saturation stop signal so no novelty logic leaks into the crawler.
+    governor = _SaturationGovernor()
+    noted_saturated: set[str] = set()
     exit_reason: str | None = None
 
     fetch_ctx = FetchContext(
@@ -123,6 +125,7 @@ def run_engine_a(
         spec=spec,
         max_items_per_source=max_items_per_source,
         clock=wallclock,
+        governor=governor,
     )
 
     for source in approved.sources:
@@ -139,7 +142,7 @@ def run_engine_a(
 
         aspect_id = source.candidate.aspect_id
         # 1.4 coverage-saturation: skip remaining WEB sources for a saturated aspect
-        if source.channel == SourceChannel.WEB and aspect_id in saturated_aspects:
+        if source.channel == SourceChannel.WEB and governor.should_stop(aspect_id):
             notes.append(f"skip {sid}: aspect {aspect_id!r} already saturated")
             continue
 
@@ -148,22 +151,25 @@ def run_engine_a(
             notes.append(f"skip {sid}: no channel configured for {source.channel.value!r}")
             continue
 
+        # The channel reports acquired content to the governor as it fetches (and
+        # flushes its own frontier mid-crawl once an aspect saturates).
         fetched = channel.fetch(source, fetch_ctx)
         chunks.extend(fetched)
         metrics = metrics.add_pages(len(fetched))
         state.mark_done(sid)
 
-        # feed the saturation tracker for web aspects
-        if source.channel == SourceChannel.WEB and fetched:
-            tracker = saturation.setdefault(aspect_id, SaturationTracker())
-            for ch in fetched:
-                tracker.update(_chunk_text(ch, store))
-            if tracker.is_saturated():
-                saturated_aspects.add(aspect_id)
-                notes.append(
-                    f"aspect {aspect_id!r} saturated after {tracker.chunks_seen} chunk(s) "
-                    f"(confidence={tracker.confidence:.2f})"
-                )
+        # note the first time a web aspect crosses the saturation line
+        if (
+            source.channel == SourceChannel.WEB
+            and governor.should_stop(aspect_id)
+            and aspect_id not in noted_saturated
+        ):
+            noted_saturated.add(aspect_id)
+            tracker = governor.trackers[aspect_id]
+            notes.append(
+                f"aspect {aspect_id!r} saturated after {tracker.chunks_seen} chunk(s) "
+                f"(confidence={tracker.confidence:.2f})"
+            )
 
         save_state(work, state)
 
@@ -204,16 +210,29 @@ def run_engine_a(
 
 
 # --------------------------------------------------------------------- helpers
+class _SaturationGovernor:
+    """Coverage Brain backing :class:`FetchContext` (OUTLINE §1.4).
+
+    One :class:`SaturationTracker` per aspect. Channels call :meth:`observe` as they
+    acquire content; :meth:`should_stop` reports saturation so the web frontier is
+    flushed mid-crawl and remaining same-aspect sources are skipped. Saturation
+    logic lives here, in the orchestrator — never in the crawler.
+    """
+
+    def __init__(self) -> None:
+        self.trackers: dict[str, SaturationTracker] = {}
+
+    def observe(self, aspect_id: str, text: str) -> None:
+        self.trackers.setdefault(aspect_id, SaturationTracker()).update(text)
+
+    def should_stop(self, aspect_id: str) -> bool:
+        tracker = self.trackers.get(aspect_id)
+        return tracker is not None and tracker.is_saturated()
+
+
 def _storage_mb(store: CorpusStore, job_id: str) -> float:
     size = getattr(store, "size_mb", None)
     return size(job_id) if callable(size) else 0.0
-
-
-def _chunk_text(chunk: CorpusChunk, store: CorpusStore) -> str:
-    try:
-        return store.get(chunk.content_uri)
-    except (OSError, FileNotFoundError):
-        return chunk.text_preview
 
 
 def _load_prior_chunks(manifest_path: Path, store: CorpusStore) -> list[CorpusChunk]:

@@ -21,7 +21,7 @@ class _StubApi:
         self._datasets = datasets
         self.calls = []
 
-    def list_datasets(self, search, limit, sort, direction):
+    def list_datasets(self, search, limit, sort, direction=None):
         self.calls.append((search, limit, sort, direction))
         return self._datasets[:limit]
 
@@ -42,8 +42,12 @@ def test_hf_registry_maps_results():
     assert api.calls and api.calls[0][0] == "rust qa"
 
 
-def test_hf_registry_missing_extra_raises():
-    # No api injected and huggingface_hub is not installed in the test venv.
+def test_hf_registry_missing_extra_raises(monkeypatch):
+    # Simulate missing extra by raising HfHubUnavailableError on _require_hf
+    import adh.search.hf_registry
+    def mock_require():
+        raise HfHubUnavailableError("mocked unavailability")
+    monkeypatch.setattr(adh.search.hf_registry, "_require_hf", mock_require)
     reg = HfDatasetRegistry()
     with pytest.raises(HfHubUnavailableError):
         reg.search("anything")
