@@ -6,16 +6,27 @@ Ties the Phase 1 pieces into one resumable, limit-bounded run:
         with coverage-saturation stop (1.4) and the circuit-breaker floor (1.4)
         -> offloaded corpus (1.3) + manifest + lineage (3.3) + durable state (1.5)
 
-The function is *mechanism*: the caller chooses the approver (the CLI prompts a human
-when ``approval_gate`` is on; tests inject a policy). Synthesis-routed aspects bypass
-acquisition and are recorded as hand-offs to Engine B.
+The run is split into two phases around the approval gate (step-2 plan, T1):
+
+* :func:`plan_run` — discover, meter the LLM spend, persist ``plan.json``, and
+  park the run at ``awaiting_approval``. Holds NO thread while parked; the plan
+  survives a restart.
+* :func:`resume_run` — apply an :class:`ApprovalDecision` to the persisted plan
+  and run the acquisition loop through to artifacts.
+
+:func:`run_engine_a` composes the two (plan -> approve -> resume) so the CLI and
+tests keep their one-call contract. The functions are *mechanism*: the caller
+chooses the approver (the CLI prompts a human when ``approval_gate`` is on; the
+service parks the run and waits for ``POST .../approve``; tests inject a policy).
+Synthesis-routed aspects bypass acquisition and are recorded as hand-offs to
+Engine B.
 """
 
 from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -25,15 +36,30 @@ from adh.channels.base import Channel
 from adh.contract import JobSpec, SourceChannel
 from adh.corpus import CorpusChunk, CorpusStore, LocalCorpusStore, SynthesisHandoff
 from adh.discovery import (
+    ApprovalDecision,
     Approver,
     AutoApprover,
+    DiscoveryAgent,
     FetchPlan,
     SourceDiscoveryAgent,
     apply_decision,
 )
+from adh.llm import UsageTracker
 from adh.provenance import build_lineage, write_lineage
 
 from .limits import CircuitBreaker, RunMetrics
+from .run_store import (
+    SUCCESS_EXIT_REASONS,
+    RunRecord,
+    RunStatus,
+    load_plan,
+    load_record,
+    load_spec,
+    new_record,
+    save_plan,
+    save_record,
+    save_spec,
+)
 from .saturation import SaturationTracker
 from .state import JobState, load_state, save_state
 
@@ -62,11 +88,140 @@ class EngineAResult:
         return len(self.handoffs)
 
 
+@dataclass
+class PlannedRun:
+    """Outcome of the discovery phase: the plan, parked at the approval gate."""
+
+    record: RunRecord
+    plan: FetchPlan
+    work_dir: Path
+
+    @property
+    def awaiting_approval(self) -> bool:
+        return self.record.status is RunStatus.AWAITING_APPROVAL
+
+
+# --------------------------------------------------------------------- phase 1
+def plan_run(
+    spec: JobSpec,
+    *,
+    work_dir: str | Path,
+    agent: DiscoveryAgent | None = None,
+    usage: UsageTracker | None = None,
+    resume: bool = True,
+) -> PlannedRun:
+    """Discover sources for ``spec`` and park the run at the approval gate.
+
+    Persists ``spec.json`` + ``plan.json`` + the run record into ``work_dir`` so the
+    pause survives a restart. Discovery LLM spend recorded in ``usage`` is folded
+    into the durable :class:`RunMetrics`; if that already trips the circuit
+    breaker (``max_llm_tokens`` is the enforced ceiling), the run is marked
+    ``failed`` instead of awaiting approval.
+    """
+    work = Path(work_dir)
+    work.mkdir(parents=True, exist_ok=True)
+
+    agent = agent or SourceDiscoveryAgent()
+    job_id = spec.job_id or spec.name
+
+    record = load_record(work) or new_record(run_id=job_id, job_id=job_id)
+    save_spec(work, spec)
+    record = save_record(work, record)
+
+    state = load_state(work, job_id) if resume else JobState(job_id=job_id)
+
+    # ---- 1.0 discovery (LLM-backed when the agent's provider is; metered) ----
+    plan = agent.discover(spec, work_dir=work)
+
+    if usage is not None:
+        total = usage.total
+        state.metrics = state.metrics.add_tokens(total.total_tokens).add_cost(total.cost_usd)
+    save_state(work, state)
+    save_plan(work, plan)
+
+    # ---- pre-approval breaker check: discovery LLM spend over budget -> FAILED.
+    # Only the two spend limits fail the run here; pages/storage/runtime caps are
+    # acquisition concerns and still gate every fetch inside resume_run.
+    trip = CircuitBreaker(spec.limits).check(state.metrics)
+    if trip is not None and trip.reason in ("max_llm_tokens", "max_cost_usd"):
+        state.notes = list(state.notes) + [f"circuit breaker at discovery: {trip}"]
+        state.exit_reason = trip.reason
+        save_state(work, state)
+        record = save_record(
+            work, replace(record, status=RunStatus.FAILED, exit_reason=trip.reason, error=str(trip))
+        )
+        return PlannedRun(record=record, plan=plan, work_dir=work)
+
+    record = save_record(work, replace(record, status=RunStatus.AWAITING_APPROVAL))
+    return PlannedRun(record=record, plan=plan, work_dir=work)
+
+
+# --------------------------------------------------------------------- phase 2
+def resume_run(
+    work_dir: str | Path,
+    decision: ApprovalDecision,
+    *,
+    channels: dict[SourceChannel, Channel] | None = None,
+    store: CorpusStore | None = None,
+    resume: bool = True,
+    max_items_per_source: int = 50,
+    clock_seconds: Callable[[], float] = time.monotonic,
+    wallclock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+) -> EngineAResult:
+    """Apply ``decision`` to the persisted plan and run acquisition to artifacts.
+
+    Loads ``spec.json`` + ``plan.json`` written by :func:`plan_run` (raises
+    ``FileNotFoundError`` if either is missing), re-checks the circuit breaker
+    before any fetch (discovery tokens already count), and reuses the per-source
+    breaker + saturation stop + ``state.mark_done`` resume machinery.
+    """
+    work = Path(work_dir)
+    spec = load_spec(work)
+    if spec is None:
+        raise FileNotFoundError(f"no {work / 'spec.json'} — run plan_run() first")
+    plan = load_plan(work)
+    if plan is None:
+        raise FileNotFoundError(f"no {work / 'plan.json'} — run plan_run() first")
+
+    job_id = spec.job_id or spec.name
+    record = load_record(work) or new_record(run_id=job_id, job_id=job_id)
+    record = save_record(work, replace(record, status=RunStatus.ACQUIRING))
+
+    try:
+        result = _acquire(
+            spec,
+            plan,
+            decision,
+            work=work,
+            channels=channels or {},
+            store=store or LocalCorpusStore(work / "corpus"),
+            resume=resume,
+            max_items_per_source=max_items_per_source,
+            clock_seconds=clock_seconds,
+            wallclock=wallclock,
+        )
+    except Exception as exc:
+        save_record(
+            work,
+            replace(record, status=RunStatus.FAILED, exit_reason="acquisition_error", error=str(exc)),
+        )
+        raise
+
+    terminal = (
+        RunStatus.SUCCEEDED
+        if result.exit_reason in SUCCESS_EXIT_REASONS
+        else RunStatus.FAILED
+    )
+    save_record(work, replace(record, status=terminal, exit_reason=result.exit_reason))
+    return result
+
+
+# --------------------------------------------------------------------- composed
 def run_engine_a(
     spec: JobSpec,
     *,
     work_dir: str | Path,
-    agent: SourceDiscoveryAgent | None = None,
+    agent: DiscoveryAgent | None = None,
     channels: dict[SourceChannel, Channel] | None = None,
     approver: Approver | None = None,
     store: CorpusStore | None = None,
@@ -74,22 +229,58 @@ def run_engine_a(
     max_items_per_source: int = 50,
     clock_seconds: Callable[[], float] = time.monotonic,
     wallclock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    usage: UsageTracker | None = None,
 ) -> EngineAResult:
-    """Run Engine A for ``spec`` and return the corpus + hand-offs + run report."""
-    work = Path(work_dir)
-    work.mkdir(parents=True, exist_ok=True)
+    """Run Engine A for ``spec`` and return the corpus + hand-offs + run report.
 
-    agent = agent or SourceDiscoveryAgent()
-    channels = channels or {}
-    store = store or LocalCorpusStore(work / "corpus")
+    Thin ``plan_run`` + approve + ``resume_run`` composition — one call, no pause.
+    """
+    planned = plan_run(spec, work_dir=work_dir, agent=agent, usage=usage, resume=resume)
+
+    resolved_approver = approver or AutoApprover()
+    if spec.discovery.approval_gate and approver is None:
+        planned.plan.notes.append(
+            "approval_gate on but no approver supplied -> auto-approving (non-interactive)"
+        )
+    decision = resolved_approver.review(planned.plan)
+
+    return resume_run(
+        work_dir,
+        decision,
+        channels=channels,
+        store=store,
+        resume=resume,
+        max_items_per_source=max_items_per_source,
+        clock_seconds=clock_seconds,
+        wallclock=wallclock,
+    )
+
+
+# --------------------------------------------------------------------- acquisition
+def _acquire(
+    spec: JobSpec,
+    plan: FetchPlan,
+    decision: ApprovalDecision,
+    *,
+    work: Path,
+    channels: dict[SourceChannel, Channel],
+    store: CorpusStore,
+    resume: bool,
+    max_items_per_source: int,
+    clock_seconds: Callable[[], float],
+    wallclock: Callable[[], datetime],
+) -> EngineAResult:
+    """The acquisition loop + artifacts (the body of the pre-split run_engine_a)."""
+    job_id = spec.job_id or spec.name
     breaker = CircuitBreaker(spec.limits)
 
-    job_id = spec.job_id or spec.name
     manifest_path = work / "manifest.jsonl"
     lineage_path = work / "lineage.json"
     summary_path = work / "run_summary.json"
 
-    state = load_state(work, job_id) if resume else JobState(job_id=job_id)
+    # plan_run persisted the (possibly fresh) state, so always read it back here:
+    # it carries the discovery token/cost spend even on a non-resumed run.
+    state = load_state(work, job_id)
     notes: list[str] = list(state.notes)
 
     # ---- prior chunks (resume): reconstruct from an existing manifest ----
@@ -99,16 +290,8 @@ def run_engine_a(
         if chunks:
             notes.append(f"resumed: {len(chunks)} chunk(s) from prior manifest")
 
-    # ---- 1.0 discovery ----
-    plan = agent.discover(spec)
-    notes.extend(plan.notes)
-
-    # ---- 1.0 approval gate (default ON; caller supplies the approver) ----
-    resolved_approver = approver or AutoApprover()
-    if spec.discovery.approval_gate and approver is None:
-        notes.append("approval_gate on but no approver supplied -> auto-approving (non-interactive)")
-    decision = resolved_approver.review(plan)
     approved = apply_decision(plan, decision)
+    notes.extend(approved.notes)  # plan notes + the approval audit line
 
     # ---- acquisition ----
     metrics = state.metrics

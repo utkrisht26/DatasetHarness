@@ -3,11 +3,31 @@
 from __future__ import annotations
 
 import copy
+import logging
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def _isolate_adh_logger():
+    """Keep the process-global ``adh`` logger from leaking across tests.
+
+    ``configure_logging`` (called by ``adh`` CLI tests via ``main()``) installs a
+    handler bound to the current ``sys.stderr`` — which pytest's capture closes at
+    test end, so a stale handler would poison later tests with "I/O on closed
+    file" errors and make idempotency hide freshly-configured streams. Strip the
+    harness-managed handlers before each test and restore the exact state after.
+    """
+    logger = logging.getLogger("adh")
+    saved = (logger.handlers[:], logger.level, logger.propagate)
+    logger.handlers[:] = [h for h in logger.handlers if not getattr(h, "_adh_managed", False)]
+    try:
+        yield
+    finally:
+        logger.handlers[:], logger.level, logger.propagate = saved
 
 
 @pytest.fixture

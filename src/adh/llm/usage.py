@@ -18,19 +18,31 @@ from typing import Any
 
 @dataclass(frozen=True)
 class TokenUsage:
-    """Immutable input/output token counts for one or more LLM calls."""
+    """Immutable input/output token counts (+ optional cost) for LLM calls.
+
+    ``cost_usd`` is populated ONLY when the provider itself surfaces a cost figure
+    in the message metadata; it is never derived from a price table (decision 4).
+    ``None`` means "cost unknown" and stays ``None`` through aggregation unless a
+    real figure arrives.
+    """
 
     input_tokens: int = 0
     output_tokens: int = 0
+    cost_usd: float | None = None
 
     @property
     def total_tokens(self) -> int:
         return self.input_tokens + self.output_tokens
 
     def __add__(self, other: "TokenUsage") -> "TokenUsage":
+        if self.cost_usd is None and other.cost_usd is None:
+            cost = None
+        else:
+            cost = round((self.cost_usd or 0.0) + (other.cost_usd or 0.0), 6)
         return TokenUsage(
             self.input_tokens + other.input_tokens,
             self.output_tokens + other.output_tokens,
+            cost,
         )
 
     def to_dict(self) -> dict:
@@ -38,6 +50,7 @@ class TokenUsage:
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "total_tokens": self.total_tokens,
+            "cost_usd": self.cost_usd,
         }
 
     @classmethod
@@ -49,15 +62,29 @@ class TokenUsage:
         """
         meta = getattr(message, "usage_metadata", None)
         if isinstance(meta, dict):
-            return cls(int(meta.get("input_tokens") or 0), int(meta.get("output_tokens") or 0))
+            return cls(
+                int(meta.get("input_tokens") or 0),
+                int(meta.get("output_tokens") or 0),
+                _cost_from(meta),
+            )
         raw = getattr(message, "response_metadata", None) or {}
         usage = raw.get("token_usage") or raw.get("usage") or {}
         if usage:
             return cls(
                 int(usage.get("prompt_tokens", usage.get("input_tokens", 0)) or 0),
                 int(usage.get("completion_tokens", usage.get("output_tokens", 0)) or 0),
+                _cost_from(usage) or _cost_from(raw),
             )
         return cls()
+
+
+def _cost_from(meta: dict) -> float | None:
+    """Provider-surfaced cost, if any (OpenRouter-style ``cost``/``total_cost`` keys)."""
+    for key in ("cost_usd", "total_cost", "cost"):
+        value = meta.get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
+    return None
 
 
 class UsageTracker:

@@ -16,6 +16,8 @@ The approval gate and coverage-gap re-discovery live in sibling modules.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 from adh.contract import DiscoveryMode, JobSpec, SourceChannel
@@ -30,6 +32,20 @@ from adh.search import (
 )
 
 from .models import Aspect, CandidateSource, FetchPlan, RankedSource, SourceEvaluation
+
+
+@runtime_checkable
+class DiscoveryAgent(Protocol):
+    """The discovery seam: anything that turns a JobSpec into a FetchPlan.
+
+    Two implementations (step-2 plan, decision 3): the hand-coded
+    :class:`SourceDiscoveryAgent` (heuristic, offline/no-key fallback) and the
+    deepagents-driven :class:`adh.discovery.deep_agent.DeepAgentDiscoveryAgent`.
+    """
+
+    def discover(self, spec: JobSpec, work_dir: Path) -> FetchPlan:
+        """Produce a ranked, deduped fetch plan for ``spec``."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -64,7 +80,7 @@ class SourceDiscoveryAgent:
     config: DiscoveryConfig = field(default_factory=DiscoveryConfig)
 
     # ------------------------------------------------------------------ public
-    def discover(self, spec: JobSpec) -> FetchPlan:
+    def discover(self, spec: JobSpec, work_dir: Path) -> FetchPlan:
         """Produce a ranked, deduped fetch plan for ``spec``."""
         job_id = spec.job_id or spec.name
         notes: list[str] = []
@@ -132,15 +148,11 @@ class SourceDiscoveryAgent:
 
     @staticmethod
     def _goal_text(spec: JobSpec) -> str:
-        # The goal is the description + motivation; seeds enrich it in seeded mode.
-        parts = [spec.description, spec.motivation]
-        if spec.discovery.mode == DiscoveryMode.SEEDED and spec.discovery.seeds:
-            parts.append("Hints: " + ", ".join(spec.discovery.seeds))
-        return ". ".join(p for p in parts if p)
+        return goal_text(spec)
 
     @staticmethod
     def _target_shape(spec: JobSpec) -> str:
-        return f"{' '.join(spec.task_categories)} {spec.modality} input output"
+        return target_shape(spec)
 
     # ------------------------------------------------------------------ routing
     def _route_aspect(
@@ -238,92 +250,145 @@ class SourceDiscoveryAgent:
             keywords=draft.keywords,
             sample_text=sample_text,
         )
-        license_ok = self._license_ok(cand.license, spec)
-        freshness_ok = self._freshness_ok(cand.published, spec)
-        score = self._score(assessment, cand.channel, license_ok, freshness_ok)
+        lic_ok = license_ok(cand.license, spec)
+        fresh_ok = freshness_ok(cand.published, spec)
+        score = score_candidate(
+            shape_match=assessment.shape_match,
+            quality=assessment.quality,
+            est_yield=assessment.est_yield,
+            channel=cand.channel,
+            license_ok=lic_ok,
+            freshness_ok=fresh_ok,
+            config=self.config,
+        )
         evaluation = SourceEvaluation(
             source_id=cand.source_id,
             shape_match=assessment.shape_match,
             quality=assessment.quality,
-            license_ok=license_ok,
-            freshness_ok=freshness_ok,
+            license_ok=lic_ok,
+            freshness_ok=fresh_ok,
             estimated_yield=assessment.est_yield,
             score=round(score, 4),
             notes=assessment.notes,
         )
         return RankedSource(candidate=cand, evaluation=evaluation)
 
-    def _score(
-        self, a, channel: SourceChannel, license_ok: bool, freshness_ok: bool
-    ) -> float:
-        c = self.config
-        yield_norm = min(a.est_yield / 50.0, 1.0)
-        base = c.w_shape * a.shape_match + c.w_quality * a.quality + c.w_yield * yield_norm
-        if channel == SourceChannel.DATASETS:
-            base += c.channel_bonus_datasets
-        if not license_ok:
-            base -= c.license_penalty
-        if not freshness_ok:
-            base -= c.freshness_penalty
-        return max(base, 0.0)
-
     # ------------------------------------------------------------------ filters
     def _license_ok(self, license_: str | None, spec: JobSpec) -> bool:
-        if not license_:
-            return False  # unknown license -> quarantine candidate (§0.8.3)
-        allowed = {lic.lower() for lic in spec.allowed_licenses}
-        return license_.lower() in allowed
+        return license_ok(license_, spec)
 
     def _freshness_ok(self, published: str | None, spec: JobSpec) -> bool:
-        after = spec.discovery.constraints.recency_after
-        if not after or not published:
-            return True  # unknown date: don't penalize
-        return str(published)[:10] >= str(after)[:10]
+        return freshness_ok(published, spec)
 
     def _domain_allowed(self, url: str, spec: JobSpec) -> bool:
-        host = (urlparse(url).hostname or "").lower()
-        c = spec.discovery.constraints
-        if any(host == d.lower() or host.endswith("." + d.lower()) for d in c.exclude_domains):
-            return False
-        if c.include_domains:
-            return any(
-                host == d.lower() or host.endswith("." + d.lower()) for d in c.include_domains
-            )
-        return True
+        return domain_allowed(url, spec)
 
     # ------------------------------------------------------------------ rank
     def _dedupe_and_rank(self, sources: list[RankedSource]) -> list[RankedSource]:
-        best: dict[str, RankedSource] = {}
-        for s in sources:
-            key = s.candidate.locator
-            if key not in best or s.evaluation.score > best[key].evaluation.score:
-                best[key] = s
-        return sorted(best.values(), key=lambda s: s.evaluation.score, reverse=True)
+        return dedupe_and_rank(sources)
 
     # ------------------------------------------------------------------ fixed
     def _fixed_plan(self, spec: JobSpec, job_id: str, notes: list[str]) -> FetchPlan:
-        """Degenerate mode: the user gave exact sources — just wrap them as a plan."""
-        ranked: list[RankedSource] = []
-        for i, seed in enumerate(spec.discovery.seeds):
-            channel = SourceChannel.DATASETS if seed.startswith("hf://") else SourceChannel.WEB
-            cand = CandidateSource(
-                source_id=f"fixed:{i}",
-                channel=channel,
-                locator=seed,
-                title=seed,
-                aspect_id="fixed",
-                discovered_via="fixed-seed",
-            )
-            evaluation = SourceEvaluation(
-                source_id=cand.source_id,
-                shape_match=1.0,
-                quality=1.0,
-                license_ok=True,
-                freshness_ok=True,
-                estimated_yield=0,
-                score=1.0,
-                notes="user-supplied fixed source",
-            )
-            ranked.append(RankedSource(candidate=cand, evaluation=evaluation))
-        notes.append(f"fixed mode: {len(ranked)} user-supplied source(s)")
-        return FetchPlan(job_id=job_id, sources=tuple(ranked), notes=notes)
+        return fixed_plan(spec, job_id, notes)
+
+
+# ------------------------------------------------------------- shared verdicts
+# Deterministic evaluation shared by BOTH discovery agents (heuristic and deep):
+# the model may judge shape/quality/yield, but license, freshness, domain policy,
+# scoring, and ranking always stay harness-side.
+def goal_text(spec: JobSpec) -> str:
+    """The plain-English goal: description + motivation (+ seed hints when seeded)."""
+    parts = [spec.description, spec.motivation]
+    if spec.discovery.mode == DiscoveryMode.SEEDED and spec.discovery.seeds:
+        parts.append("Hints: " + ", ".join(spec.discovery.seeds))
+    return ". ".join(p for p in parts if p)
+
+
+def target_shape(spec: JobSpec) -> str:
+    return f"{' '.join(spec.task_categories)} {spec.modality} input output"
+
+
+def license_ok(license_: str | None, spec: JobSpec) -> bool:
+    if not license_:
+        return False  # unknown license -> quarantine candidate (§0.8.3)
+    allowed = {lic.lower() for lic in spec.allowed_licenses}
+    return license_.lower() in allowed
+
+
+def freshness_ok(published: str | None, spec: JobSpec) -> bool:
+    after = spec.discovery.constraints.recency_after
+    if not after or not published:
+        return True  # unknown date: don't penalize
+    return str(published)[:10] >= str(after)[:10]
+
+
+def domain_allowed(url: str, spec: JobSpec) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    c = spec.discovery.constraints
+    if any(host == d.lower() or host.endswith("." + d.lower()) for d in c.exclude_domains):
+        return False
+    if c.include_domains:
+        return any(
+            host == d.lower() or host.endswith("." + d.lower()) for d in c.include_domains
+        )
+    return True
+
+
+def score_candidate(
+    *,
+    shape_match: float,
+    quality: float,
+    est_yield: int,
+    channel: SourceChannel,
+    license_ok: bool,
+    freshness_ok: bool,
+    config: DiscoveryConfig,
+) -> float:
+    """Aggregate ranking score: weighted assessment + channel bonus - policy penalties."""
+    yield_norm = min(est_yield / 50.0, 1.0)
+    base = config.w_shape * shape_match + config.w_quality * quality + config.w_yield * yield_norm
+    if channel == SourceChannel.DATASETS:
+        base += config.channel_bonus_datasets
+    if not license_ok:
+        base -= config.license_penalty
+    if not freshness_ok:
+        base -= config.freshness_penalty
+    return max(base, 0.0)
+
+
+def dedupe_and_rank(sources: list[RankedSource]) -> list[RankedSource]:
+    """Best evaluation per locator, sorted best-first."""
+    best: dict[str, RankedSource] = {}
+    for s in sources:
+        key = s.candidate.locator
+        if key not in best or s.evaluation.score > best[key].evaluation.score:
+            best[key] = s
+    return sorted(best.values(), key=lambda s: s.evaluation.score, reverse=True)
+
+
+def fixed_plan(spec: JobSpec, job_id: str, notes: list[str]) -> FetchPlan:
+    """Degenerate mode: the user gave exact sources — just wrap them as a plan."""
+    ranked: list[RankedSource] = []
+    for i, seed in enumerate(spec.discovery.seeds):
+        channel = SourceChannel.DATASETS if seed.startswith("hf://") else SourceChannel.WEB
+        cand = CandidateSource(
+            source_id=f"fixed:{i}",
+            channel=channel,
+            locator=seed,
+            title=seed,
+            aspect_id="fixed",
+            discovered_via="fixed-seed",
+        )
+        evaluation = SourceEvaluation(
+            source_id=cand.source_id,
+            shape_match=1.0,
+            quality=1.0,
+            license_ok=True,
+            freshness_ok=True,
+            estimated_yield=0,
+            score=1.0,
+            notes="user-supplied fixed source",
+        )
+        ranked.append(RankedSource(candidate=cand, evaluation=evaluation))
+    notes.append(f"fixed mode: {len(ranked)} user-supplied source(s)")
+    return FetchPlan(job_id=job_id, sources=tuple(ranked), notes=notes)

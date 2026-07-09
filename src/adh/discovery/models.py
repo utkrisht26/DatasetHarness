@@ -22,6 +22,23 @@ class Aspect:
     rationale: str
     keywords: tuple[str, ...]
 
+    def to_dict(self) -> dict:
+        return {
+            "aspect_id": self.aspect_id,
+            "topic": self.topic,
+            "rationale": self.rationale,
+            "keywords": list(self.keywords),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Aspect":
+        return cls(
+            aspect_id=data["aspect_id"],
+            topic=data["topic"],
+            rationale=data.get("rationale", ""),
+            keywords=tuple(data.get("keywords", [])),
+        )
+
 
 @dataclass(frozen=True)
 class CandidateSource:
@@ -37,6 +54,33 @@ class CandidateSource:
     published: str | None = None
     discovered_via: str = ""  # the query / registry that surfaced it
 
+    def to_dict(self) -> dict:
+        return {
+            "source_id": self.source_id,
+            "channel": self.channel.value,
+            "locator": self.locator,
+            "title": self.title,
+            "aspect_id": self.aspect_id,
+            "snippet": self.snippet,
+            "license": self.license,
+            "published": self.published,
+            "discovered_via": self.discovered_via,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CandidateSource":
+        return cls(
+            source_id=data["source_id"],
+            channel=SourceChannel(data["channel"]),
+            locator=data["locator"],
+            title=data.get("title", ""),
+            aspect_id=data.get("aspect_id", ""),
+            snippet=data.get("snippet", ""),
+            license=data.get("license"),
+            published=data.get("published"),
+            discovered_via=data.get("discovered_via", ""),
+        )
+
 
 @dataclass(frozen=True)
 class SourceEvaluation:
@@ -50,6 +94,31 @@ class SourceEvaluation:
     estimated_yield: int
     score: float  # aggregate ranking score
     notes: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "source_id": self.source_id,
+            "shape_match": self.shape_match,
+            "quality": self.quality,
+            "license_ok": self.license_ok,
+            "freshness_ok": self.freshness_ok,
+            "estimated_yield": self.estimated_yield,
+            "score": self.score,
+            "notes": self.notes,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SourceEvaluation":
+        return cls(
+            source_id=data["source_id"],
+            shape_match=float(data["shape_match"]),
+            quality=float(data["quality"]),
+            license_ok=bool(data["license_ok"]),
+            freshness_ok=bool(data["freshness_ok"]),
+            estimated_yield=int(data["estimated_yield"]),
+            score=float(data["score"]),
+            notes=data.get("notes", ""),
+        )
 
 
 @dataclass(frozen=True)
@@ -66,6 +135,16 @@ class RankedSource:
     @property
     def source_id(self) -> str:
         return self.candidate.source_id
+
+    def to_dict(self) -> dict:
+        return {"candidate": self.candidate.to_dict(), "evaluation": self.evaluation.to_dict()}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "RankedSource":
+        return cls(
+            candidate=CandidateSource.from_dict(data["candidate"]),
+            evaluation=SourceEvaluation.from_dict(data["evaluation"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -84,3 +163,25 @@ class FetchPlan:
 
     def by_channel(self, channel: SourceChannel) -> tuple[RankedSource, ...]:
         return tuple(s for s in self.sources if s.channel == channel)
+
+    def to_dict(self) -> dict:
+        """JSON form for ``plan.json`` — the plan must survive the approval pause."""
+        return {
+            "job_id": self.job_id,
+            "sources": [s.to_dict() for s in self.sources],
+            "synthesis_aspects": [a.to_dict() for a in self.synthesis_aspects],
+            "aspects": [a.to_dict() for a in self.aspects],
+            "notes": list(self.notes),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "FetchPlan":
+        return cls(
+            job_id=data["job_id"],
+            sources=tuple(RankedSource.from_dict(s) for s in data.get("sources", [])),
+            synthesis_aspects=tuple(
+                Aspect.from_dict(a) for a in data.get("synthesis_aspects", [])
+            ),
+            aspects=tuple(Aspect.from_dict(a) for a in data.get("aspects", [])),
+            notes=list(data.get("notes", [])),
+        )

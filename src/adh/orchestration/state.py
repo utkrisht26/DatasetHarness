@@ -10,10 +10,22 @@ guarantee at the graph level; this is the equivalent for the offline pipeline.)
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .limits import RunMetrics
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write via a temp file + rename so a concurrent reader never sees a torn file.
+
+    The service reads these files from request threads while engine workers write
+    them; ``Path.write_text`` truncates in place and can expose partial JSON.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 @dataclass
@@ -70,5 +82,5 @@ def load_state(work_dir: Path, job_id: str) -> JobState:
 def save_state(work_dir: Path, state: JobState) -> Path:
     p = state_path(work_dir)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(state.to_dict(), indent=2), encoding="utf-8")
+    atomic_write_text(p, json.dumps(state.to_dict(), indent=2))
     return p

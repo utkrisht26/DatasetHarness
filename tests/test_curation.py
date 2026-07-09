@@ -1,0 +1,168 @@
+"""Curation — dedup (2.4), decontamination (2.4), format/validate (2.5), offline."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import pytest
+
+from adh.contract import (
+    RecordValidationError,
+    SourceChannel,
+    VerifiabilityTier,
+    load_record_schema,
+)
+from adh.curation import Decontaminator, Deduper, assign_split, build_record, dead_letter_row, dedupe
+from adh.curation.dedup import DedupAssignment
+from adh.generation import Candidate
+from adh.verification import Verdict
+
+
+# --------------------------------------------------------------------- dedup
+def test_exact_dedup_clusters_identical():
+    out = Deduper(method="exact").cluster(["hello world", "hello world", "different text"])
+    assert out[0].cluster_id == out[1].cluster_id
+    assert out[0].is_duplicate is False and out[1].is_duplicate is True
+    assert out[2].cluster_id != out[0].cluster_id and out[2].is_duplicate is False
+
+
+def test_minhash_dedup_clusters_near_duplicates():
+    a = "the quick brown fox jumps over the lazy dog in the meadow every morning"
+    near = "the quick brown fox jumps over the lazy dog in the meadow each morning"
+    far = "completely unrelated content about database indexing and query planners here"
+    out = Deduper(method="minhash", ngram=5, jaccard=0.6).cluster([a, near, far])
+    assert out[0].cluster_id == out[1].cluster_id  # near-dup joined
+    assert out[1].is_duplicate is True
+    assert out[2].cluster_id != out[0].cluster_id  # unrelated stays separate
+
+
+def test_minhash_pure_fallback_matches_semantics(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_datasketch(name, *args, **kwargs):
+        if name == "datasketch":
+            raise ImportError("simulated: datasketch missing")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_datasketch)
+    a = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"
+    dup = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"
+    out = Deduper(method="minhash", ngram=3, jaccard=0.8).cluster([a, dup])
+    assert out[1].is_duplicate is True
+
+
+def test_dedupe_helper_warns_on_global_scope(caplog):
+    from adh.contract import DedupPolicy
+
+    with caplog.at_level("WARNING"):
+        dedupe(["a b c d e", "x y z"], policy=DedupPolicy(scope="global"))
+    assert any("global" in r.message for r in caplog.records)
+
+
+# --------------------------------------------------------------------- decontam
+def test_decontaminator_flags_overlap(tmp_path):
+    held = tmp_path / "heldout.jsonl"
+    held.write_text('{"input": "what is the capital of france", "output": "paris"}\n', encoding="utf-8")
+    d = Decontaminator.from_paths([str(held)], ngram=4)
+    assert d.active
+    assert d.is_contaminated("tell me what is the capital of france please") is True
+    assert d.is_contaminated("an unrelated sentence about rust async macros") is False
+
+
+def test_decontaminator_empty_when_no_paths():
+    d = Decontaminator.from_paths([])
+    assert not d.active
+    assert d.is_contaminated("anything at all goes here") is False
+
+
+# --------------------------------------------------------------------- format / split
+def test_assign_split_is_deterministic_and_proportioned():
+    splits = {"train": 0.8, "validation": 0.1, "test": 0.1}
+    ids = [f"rec-{i}" for i in range(400)]
+    counts = {"train": 0, "validation": 0, "test": 0}
+    for rid in ids:
+        counts[assign_split(rid, splits, contaminated=False)] += 1
+    assert counts["train"] > counts["validation"]  # roughly proportional
+    # deterministic
+    assert assign_split("rec-1", splits, contaminated=False) == assign_split(
+        "rec-1", splits, contaminated=False
+    )
+
+
+def test_contaminated_record_never_lands_in_eval_split():
+    splits = {"train": 0.0, "validation": 0.5, "test": 0.5}  # would force eval without the guard
+    for i in range(50):
+        assert assign_split(f"r{i}", splits, contaminated=True) == "train"
+
+
+def _candidate(tier=2, **kw):
+    base = dict(
+        candidate_id="job:a1:abcdef123456",
+        job_id="job",
+        aspect_id="a1",
+        verifiability_tier=VerifiabilityTier(tier),
+        input="Explain async macros.",
+        output="Async macros expand at compile time to reduce boilerplate.",
+        source_channel=SourceChannel.WEB,
+        source_url="https://docs.rs/tokio",
+        source_license="MIT",
+        source_sha256="abc",
+        model_id="anthropic:claude-haiku-4-5",
+        prompt_hash="sha256:deadbeef",
+        generated_at=datetime.now(timezone.utc),
+        task_category="question-answering",
+    )
+    base.update(kw)
+    return Candidate(**base)
+
+
+def test_build_record_produces_valid_record():
+    schema = load_record_schema("schemas/qa_record.schema.json")
+    verdict = Verdict(True, "jury", judge_scores={"overall": 4.0}, judge_models=("m1", "m2"))
+    rec = build_record(
+        _candidate(tier=2),
+        spec=_spec(),
+        schema=schema,
+        verdict=verdict,
+        dedup=DedupAssignment("clu-1", False),
+        contaminated=False,
+    )
+    assert rec.split in ("train", "validation", "test")
+    assert rec.judge_scores == {"overall": 4.0}
+    assert rec.dedup_cluster_id == "clu-1"
+
+
+def test_build_record_rejects_contract_violation_via_dead_letter():
+    schema = load_record_schema("schemas/qa_record.schema.json")
+    verdict = Verdict(True, "jury", judge_scores={"overall": 4.0}, judge_models=("m1",))
+    bad = _candidate(tier=2, output="")  # violates minLength:1 on output
+    with pytest.raises(RecordValidationError) as ei:
+        build_record(bad, spec=_spec(), schema=schema, verdict=verdict, dedup=DedupAssignment("c", False), contaminated=False)
+    row = dead_letter_row(bad, ei.value)
+    assert row["candidate_id"] == "job:a1:abcdef123456" and row["error"]
+
+
+def _spec(tier=2):
+    from adh.contract import JobSpec
+
+    base = dict(
+        name="job",
+        description="d",
+        motivation="m",
+        intended_uses=["supervised-fine-tuning"],
+        verifiability_tier=tier,
+        task_categories=["question-answering"],
+        languages=["en"],
+        target_size={"records": 10},
+        record_schema_ref="schemas/qa_record.schema.json",
+        allowed_licenses=["MIT"],
+        generator_models=[],
+        decontaminate_against=["./eval/heldout_rust_qa.jsonl"],
+        output_license="MIT",
+        splits={"train": 0.9, "validation": 0.05, "test": 0.05},
+    )
+    if tier in (2, 3):
+        base["judge_config"] = {"models": ["anthropic:x", "openai:y"], "min_score": 3.5}
+    return JobSpec(**base)

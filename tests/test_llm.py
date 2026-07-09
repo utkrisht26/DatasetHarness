@@ -77,6 +77,7 @@ def test_usage_tracker_accumulates():
         "input_tokens": 15,
         "output_tokens": 3,
         "total_tokens": 18,
+        "cost_usd": None,  # no provider-surfaced cost -> reported unknown (decision 4)
         "calls": 2,
     }
 

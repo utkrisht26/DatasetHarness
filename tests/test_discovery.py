@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 
+DUMMY_PATH = Path(".")
 
 from adh.contract import JobSpec, SourceChannel
 from adh.discovery import (
@@ -80,7 +82,7 @@ def search_with_rust() -> InMemorySearchProvider:
 # ----------------------------------------------------------------- decomposition
 def test_decompose_produces_aspects(minimal_spec_dict):
     agent = SourceDiscoveryAgent()
-    plan = agent.discover(make_spec(minimal_spec_dict))
+    plan = agent.discover(make_spec(minimal_spec_dict), DUMMY_PATH)
     assert len(plan.aspects) >= 1
     assert all(a.aspect_id for a in plan.aspects)
     # keywords should capture the domain
@@ -91,7 +93,7 @@ def test_decompose_produces_aspects(minimal_spec_dict):
 # ----------------------------------------------------------------- routing precedence
 def test_reuse_first_prefers_datasets(minimal_spec_dict):
     agent = SourceDiscoveryAgent(registry=registry_with_rust(), search=search_with_rust())
-    plan = agent.discover(make_spec(minimal_spec_dict))
+    plan = agent.discover(make_spec(minimal_spec_dict), DUMMY_PATH)
     assert plan.sources, "expected at least one source"
     top = plan.sources[0]
     assert top.channel == SourceChannel.DATASETS
@@ -103,7 +105,7 @@ def test_web_fallback_when_no_dataset(minimal_spec_dict):
         registry=InMemoryDatasetRegistry(),  # empty -> no reuse
         search=search_with_rust(),
     )
-    plan = agent.discover(make_spec(minimal_spec_dict))
+    plan = agent.discover(make_spec(minimal_spec_dict), DUMMY_PATH)
     assert plan.sources
     assert all(s.channel == SourceChannel.WEB for s in plan.sources)
 
@@ -113,7 +115,7 @@ def test_synthesis_when_no_external_source(minimal_spec_dict):
         registry=InMemoryDatasetRegistry(),
         search=InMemorySearchProvider(),  # empty web too
     )
-    plan = agent.discover(make_spec(minimal_spec_dict))
+    plan = agent.discover(make_spec(minimal_spec_dict), DUMMY_PATH)
     assert plan.sources == ()
     # rust/async/macro are model-known -> synthesis aspects
     assert plan.synthesis_aspects
@@ -126,7 +128,7 @@ def test_unknown_domain_no_synthesis_is_coverage_gap(minimal_spec_dict):
     spec_dict["motivation"] = "specialized flange knowledge"
     spec = JobSpec.model_validate(spec_dict)
     agent = SourceDiscoveryAgent(registry=InMemoryDatasetRegistry(), search=InMemorySearchProvider())
-    plan = agent.discover(spec)
+    plan = agent.discover(spec, DUMMY_PATH)
     assert plan.is_empty
     assert any("coverage gap" in n for n in plan.notes)
 
@@ -135,7 +137,7 @@ def test_unknown_domain_no_synthesis_is_coverage_gap(minimal_spec_dict):
 def test_exclude_domains_filters_web(minimal_spec_dict):
     agent = SourceDiscoveryAgent(registry=InMemoryDatasetRegistry(), search=search_with_rust())
     spec = make_spec(minimal_spec_dict, constraints={"exclude_domains": ["reddit.com"]})
-    plan = agent.discover(spec)
+    plan = agent.discover(spec, DUMMY_PATH)
     locators = {s.candidate.locator for s in plan.sources}
     assert not any("reddit.com" in loc for loc in locators)
 
@@ -143,7 +145,7 @@ def test_exclude_domains_filters_web(minimal_spec_dict):
 def test_include_domains_whitelist(minimal_spec_dict):
     agent = SourceDiscoveryAgent(registry=InMemoryDatasetRegistry(), search=search_with_rust())
     spec = make_spec(minimal_spec_dict, constraints={"include_domains": ["docs.rs"]})
-    plan = agent.discover(spec)
+    plan = agent.discover(spec, DUMMY_PATH)
     assert plan.sources
     assert all("docs.rs" in s.candidate.locator for s in plan.sources)
 
@@ -152,7 +154,7 @@ def test_unknown_license_marked_not_ok(minimal_spec_dict):
     agent = SourceDiscoveryAgent(registry=InMemoryDatasetRegistry(), search=search_with_rust())
     # reddit hit has no license_hint -> license_ok False
     spec = make_spec(minimal_spec_dict, constraints={"include_domains": ["reddit.com"]})
-    plan = agent.discover(spec)
+    plan = agent.discover(spec, DUMMY_PATH)
     assert plan.sources
     assert all(not s.evaluation.license_ok for s in plan.sources)
 
@@ -171,7 +173,7 @@ def test_freshness_penalizes_old(minimal_spec_dict):
     )
     agent = SourceDiscoveryAgent(registry=InMemoryDatasetRegistry(), search=old_search)
     spec = make_spec(minimal_spec_dict, constraints={"recency_after": "2022-01-01"})
-    plan = agent.discover(spec)
+    plan = agent.discover(spec, DUMMY_PATH)
     assert plan.sources
     assert all(not s.evaluation.freshness_ok for s in plan.sources)
 
@@ -184,7 +186,7 @@ def test_fixed_mode_wraps_seeds(minimal_spec_dict):
         mode="fixed",
         seeds=["https://docs.rs/x", "hf://org/ds"],
     )
-    plan = agent.discover(spec)
+    plan = agent.discover(spec, DUMMY_PATH)
     assert len(plan.sources) == 2
     channels = {s.channel for s in plan.sources}
     assert channels == {SourceChannel.WEB, SourceChannel.DATASETS}
@@ -193,7 +195,7 @@ def test_fixed_mode_wraps_seeds(minimal_spec_dict):
 def test_seeded_mode_enriches_goal(minimal_spec_dict):
     agent = SourceDiscoveryAgent(registry=registry_with_rust(), search=search_with_rust())
     spec = make_spec(minimal_spec_dict, mode="seeded", seeds=["tokio internals"])
-    plan = agent.discover(spec)
+    plan = agent.discover(spec, DUMMY_PATH)
     assert plan.sources  # still discovers, seeds only enrich
 
 
@@ -201,7 +203,7 @@ def test_seeded_mode_enriches_goal(minimal_spec_dict):
 def test_rediscover_merges_new_sources(minimal_spec_dict):
     agent = SourceDiscoveryAgent(registry=InMemoryDatasetRegistry(), search=search_with_rust())
     spec = make_spec(minimal_spec_dict)
-    plan = agent.discover(spec)
+    plan = agent.discover(spec, DUMMY_PATH)
     before = len(plan.sources)
     # An aspect that the broader search can satisfy from a new registry hit.
     agent2 = SourceDiscoveryAgent(registry=registry_with_rust(), search=search_with_rust())
@@ -214,7 +216,7 @@ def test_rediscover_merges_new_sources(minimal_spec_dict):
 # ----------------------------------------------------------------- ranking
 def test_sources_ranked_descending(minimal_spec_dict):
     agent = SourceDiscoveryAgent(registry=registry_with_rust(), search=search_with_rust())
-    plan = agent.discover(make_spec(minimal_spec_dict))
+    plan = agent.discover(make_spec(minimal_spec_dict), DUMMY_PATH)
     scores = [s.evaluation.score for s in plan.sources]
     assert scores == sorted(scores, reverse=True)
 
@@ -222,7 +224,7 @@ def test_sources_ranked_descending(minimal_spec_dict):
 # ----------------------------------------------------------------- approval gate
 def test_auto_approver_approves_all(minimal_spec_dict):
     agent = SourceDiscoveryAgent(registry=registry_with_rust(), search=search_with_rust())
-    plan = agent.discover(make_spec(minimal_spec_dict))
+    plan = agent.discover(make_spec(minimal_spec_dict), DUMMY_PATH)
     decision = AutoApprover().review(plan)
     approved = apply_decision(plan, decision)
     assert len(approved.sources) == len(plan.sources)
@@ -230,7 +232,7 @@ def test_auto_approver_approves_all(minimal_spec_dict):
 
 def test_threshold_approver_filters(minimal_spec_dict):
     agent = SourceDiscoveryAgent(registry=registry_with_rust(), search=search_with_rust())
-    plan = agent.discover(make_spec(minimal_spec_dict))
+    plan = agent.discover(make_spec(minimal_spec_dict), DUMMY_PATH)
     decision = ThresholdApprover(min_score=99.0).review(plan)  # impossible bar
     approved = apply_decision(plan, decision)
     assert approved.sources == ()
@@ -238,7 +240,7 @@ def test_threshold_approver_filters(minimal_spec_dict):
 
 def test_callback_approver_picks_subset(minimal_spec_dict):
     agent = SourceDiscoveryAgent(registry=registry_with_rust(), search=search_with_rust())
-    plan = agent.discover(make_spec(minimal_spec_dict))
+    plan = agent.discover(make_spec(minimal_spec_dict), DUMMY_PATH)
     first_id = plan.sources[0].source_id
 
     def pick_first(p: FetchPlan) -> ApprovalDecision:
@@ -252,7 +254,7 @@ def test_callback_approver_picks_subset(minimal_spec_dict):
 
 def test_apply_decision_can_drop_synthesis(minimal_spec_dict):
     agent = SourceDiscoveryAgent(registry=InMemoryDatasetRegistry(), search=InMemorySearchProvider())
-    plan = agent.discover(make_spec(minimal_spec_dict))
+    plan = agent.discover(make_spec(minimal_spec_dict), DUMMY_PATH)
     assert plan.synthesis_aspects
     decision = ApprovalDecision(approved_source_ids=frozenset(), approve_synthesis=False)
     approved = apply_decision(plan, decision)
@@ -261,7 +263,7 @@ def test_apply_decision_can_drop_synthesis(minimal_spec_dict):
 
 def test_render_plan_is_readable(minimal_spec_dict):
     agent = SourceDiscoveryAgent(registry=registry_with_rust(), search=search_with_rust())
-    plan = agent.discover(make_spec(minimal_spec_dict))
+    plan = agent.discover(make_spec(minimal_spec_dict), DUMMY_PATH)
     text = render_plan(plan)
     assert "Fetch plan" in text
     assert "datasets" in text

@@ -18,7 +18,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from langchain_core.language_models.chat_models import BaseChatModel
 
 # Cheap, capable default for relevance/judging work; override per call site.
-DEFAULT_CHAT_MODEL = "anthropic:claude-haiku-4-5"
+DEFAULT_CHAT_MODEL = "openai:gpt-4o-mini"
 
 
 def build_chat_model(model_id: str = DEFAULT_CHAT_MODEL, **kwargs: Any) -> "BaseChatModel":

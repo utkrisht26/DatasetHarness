@@ -1,7 +1,7 @@
 [project]
 name = "adh"
 version = "0.1.0"
-description = "Agentic Dataset Generation Harness — Engine A (Discovery + Acquisition)"
+description = "Agentic Dataset Generation Harness — Engine A (Discovery + Acquisition) + Engine B (Synthesis + Curation)"
 requires-python = ">=3.11"
 readme = "README.md"
 authors = [{ name = "Brilo", email = "uttkrisht@brilo.ai" }]
@@ -22,7 +22,8 @@ web = ["crawl4ai>=0.9", "rank_bm25>=0.2"]
 # `datasets` channel — existing-dataset discovery + reuse (Phase 1.6)
 datasets = ["huggingface_hub>=0.36"]
 # deepagents research loop + MCP tool loading (Phase 1.0/1.2); `langchain` provides
-# init_chat_model for the provider-generic LlmRelevanceJudge.
+# init_chat_model for the provider-generic LlmRelevanceJudge AND Engine B's
+# LlmGenerator + LLM-as-jury panel (Phase 2.2/2.3).
 agents = [
     "deepagents>=0.6",
     "langchain>=0.3",
@@ -30,9 +31,17 @@ agents = [
     "langchain-anthropic>=0.3",
     "langchain-openai>=0.2",
 ]
+# Engine B deterministic Tier-1 verifiers (Phase 2.3 step 5). `sympy` backs the
+# symbolic-math oracle; the code + schema verifiers use only the stdlib.
+verify = ["sympy>=1.12"]
+# Engine B near-dedup (Phase 2.4). `datasketch` provides tuned MinHash + LSH; the
+# harness ships a pure-Python MinHash fallback so dedup still runs without the extra.
+dedup = ["datasketch>=1.6"]
+# Engine B delivery (Phase 4.1) — Parquet shards. JSONL output needs no extra.
+deliver = ["pyarrow>=16"]
 # crawl microservice — HTTP surface over the web channel (Phase 1.1 service form)
 serve = ["adh[web]", "fastapi>=0.110", "uvicorn>=0.30", "httpx>=0.27"]
-all = ["adh[web,datasets,agents,serve]"]
+all = ["adh[web,datasets,agents,verify,dedup,deliver,serve]"]
 
 [dependency-groups]
 dev = [
@@ -40,6 +49,9 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.6",
     "rank_bm25>=0.2",  # exercises Bm25RelevanceJudge offline
+    "sympy>=1.12",     # exercises the real Tier-1 math verifier offline
+    "datasketch>=1.6", # exercises the real MinHash/LSH near-dedup offline
+    "pyarrow>=16",     # exercises Parquet delivery offline
 ]
 
 [project.scripts]

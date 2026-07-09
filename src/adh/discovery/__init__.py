@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .agent import DiscoveryConfig, SourceDiscoveryAgent
+from .agent import DiscoveryAgent, DiscoveryConfig, SourceDiscoveryAgent
 from .approval import (
     ApprovalDecision,
     Approver,
@@ -11,6 +11,12 @@ from .approval import (
     ThresholdApprover,
     apply_decision,
     render_plan,
+)
+from .deep_agent import (
+    DeepAgentDiscoveryAgent,
+    DiscoveryAgentError,
+    DiscoveryReport,
+    FallbackDiscoveryAgent,
 )
 from .models import (
     Aspect,
@@ -21,7 +27,12 @@ from .models import (
 )
 
 __all__ = [
+    "DiscoveryAgent",
     "SourceDiscoveryAgent",
+    "DeepAgentDiscoveryAgent",
+    "FallbackDiscoveryAgent",
+    "DiscoveryAgentError",
+    "DiscoveryReport",
     "DiscoveryConfig",
     "Aspect",
     "CandidateSource",

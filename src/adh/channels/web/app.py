@@ -20,7 +20,6 @@ thread pool over the synchronous bridge. Everything is injectable for offline te
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import time
 import uuid
@@ -29,10 +28,8 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Callable, Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from adh.llm import DEFAULT_CHAT_MODEL, UsageTracker
@@ -303,7 +300,16 @@ def create_app(
     llm_judge_factory: JudgeFactory | None = None,
     workers: int = 2,
 ) -> FastAPI:
-    """Build the FastAPI app. All collaborators are injectable for offline tests."""
+    """Build the legacy standalone crawl app (routes at ``/api/*``).
+
+    Superseded by the gateway (:func:`adh.service.app.create_app`), which mounts
+    the same router at ``/api/crawl/*``. All collaborators stay injectable for
+    offline tests.
+    """
+    # Lazy import: the router module imports this module's models at runtime.
+    from adh.service.routers.crawl import build_crawl_router
+    from adh.service.spa import mount_spa
+
     service = CrawlServiceApp(fetcher, llm_judge_factory=llm_judge_factory, workers=workers)
 
     @asynccontextmanager
@@ -322,121 +328,6 @@ def create_app(
         allow_headers=["*"],
     )
 
-    @app.post("/api/jobs", status_code=202)
-    def submit_job(request: CrawlJobRequest) -> dict:
-        return {"job_id": service.submit(request)}
-
-    @app.get("/api/jobs")
-    def list_jobs(status: str | None = None) -> list[JobSummaryOut]:
-        with service._lock:
-            records = list(service._jobs.items())
-            
-        summaries = []
-        for job_id, record in records:
-            with record._lock:
-                if status and record.status != status:
-                    continue
-                dur = 0.0
-                if record.started_at is not None:
-                    if record.completed_at is not None:
-                        dur = record.completed_at - record.started_at
-                    else:
-                        dur = time.time() - record.started_at
-                summaries.append(
-                    JobSummaryOut(
-                        job_id=job_id,
-                        status=record.status,  # type: ignore[arg-type]
-                        url=record.request.url,
-                        n_pages=len(record.pages),
-                        pages_fetched=record.pages_fetched,
-                        duration=dur,
-                        saturated=record.saturated,
-                        created_at=record.created_at,
-                    )
-                )
-        summaries.sort(key=lambda s: s.created_at, reverse=True)
-        return summaries
-
-    @app.get("/api/jobs/{job_id}")
-    def get_job(job_id: str, include_content: bool = True) -> JobOut:
-        record = service.get(job_id)
-        if record is None:
-            raise HTTPException(status_code=404, detail=f"unknown job {job_id!r}")
-        with record._lock:
-            pages = [
-                PageOut(
-                    url=p.url,
-                    markdown=p.markdown if include_content else "",
-                    license_hint=p.license_hint,
-                    relevance_score=p.relevance_score,
-                    depth=p.depth,
-                    fetched_at=p.fetched_at,
-                    token_estimate=p.token_estimate,
-                )
-                for p in record.pages
-            ]
-            dur = 0.0
-            if record.started_at is not None:
-                if record.completed_at is not None:
-                    dur = record.completed_at - record.started_at
-                else:
-                    dur = time.time() - record.started_at
-            return JobOut(
-                job_id=job_id,
-                status=record.status,  # type: ignore[arg-type]
-                url=record.request.url,
-                pages=pages,
-                n_pages=len(record.pages),
-                saturated=record.saturated,
-                error=record.error,
-                created_at=record.created_at,
-                started_at=record.started_at,
-                completed_at=record.completed_at,
-                duration=dur,
-                pages_fetched=record.pages_fetched,
-            )
-
-    @app.post("/api/jobs/{job_id}/cancel")
-    def cancel_job(job_id: str) -> dict:
-        if service.get(job_id) is None:
-            raise HTTPException(status_code=404, detail=f"unknown job {job_id!r}")
-        return {"cancelled": service.cancel(job_id)}
-
-    @app.get("/api/jobs/{job_id}/events")
-    def get_job_events(job_id: str, since: int = 0) -> dict:
-        record = service.get(job_id)
-        if record is None:
-            raise HTTPException(status_code=404, detail=f"unknown job {job_id!r}")
-        with record._lock:
-            events = record.events[since:]
-            next_since = len(record.events)
-        return {"events": events, "next_since": next_since}
-
-    @app.get("/api/healthz")
-    def healthz() -> dict:
-        return {"status": "ok", "jobs": service.counts()}
-
-    @app.get("/api/usage")
-    def usage() -> dict:
-        return {"llm": service.usage.to_dict(), "jobs": service.counts()}
-
-    # Static mount fallback routing for React Router SPA (mounted last)
-    frontend_dist = os.path.join(os.getcwd(), "frontend/dist")
-    if not os.path.exists(frontend_dist):
-        sibling_path = os.path.join(os.path.dirname(os.getcwd()), "adh-frontend", "dist")
-        if os.path.exists(sibling_path):
-            frontend_dist = sibling_path
-
-    if os.path.exists(frontend_dist):
-        app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist, "assets")), name="assets")
-
-        @app.get("/{catchall:path}", include_in_schema=False)
-        def serve_spa(catchall: str):
-            if catchall.startswith(("api/", "api", "docs", "openapi.json", "healthz", "usage")):
-                raise HTTPException(status_code=404, detail="Not Found")
-            file_path = os.path.join(frontend_dist, catchall)
-            if catchall and os.path.exists(file_path) and os.path.isfile(file_path):
-                return FileResponse(file_path)
-            return FileResponse(os.path.join(frontend_dist, "index.html"))
-
+    app.include_router(build_crawl_router(service), prefix="/api")
+    mount_spa(app)
     return app

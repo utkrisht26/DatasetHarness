@@ -305,7 +305,7 @@ class CrawlRouter:
                         segments = [s for s in urlparse(link.url).path.split("/") if s]
                         if segments:
                             lead = segments[0].lower()
-                            if re.match(r"^[a-z]{2}(-[a-z]{2,4})?$", lead) and lead not in [l.lower() for l in job.seed.allowed_locales]:
+                            if re.match(r"^[a-z]{2}(-[a-z]{2,4})?$", lead) and lead not in [loc.lower() for loc in job.seed.allowed_locales]:
                                 reason = "locale filter"
                     job.on_event("pruned", link.url, {"reason": reason, "depth": parent.depth + 1})
                 continue

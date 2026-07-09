@@ -1,11 +1,13 @@
-"""Offline end-to-end demo of Engine A (no network, no API keys).
+"""Offline end-to-end demo of Engine A + Engine B (no network, no API keys).
 
 Wires the deterministic in-memory backends (standing in for Crawl4AI / HF Hub / a
-search provider) so you can watch the full Discovery -> Approval -> Acquisition path
-produce a provenance-tagged corpus + manifest + lineage. This is also the template
-for injecting *real* backends in production: swap the in-memory ports for
-``Crawl4AIContentFetcher`` / ``HfDatasetLoader`` / ``HfDatasetRegistry`` and a real
-``LLMProvider``.
+search provider) so you can watch the full path — Discovery -> Approval ->
+Acquisition (Engine A) -> Seed -> Generate -> Tiered-Verify -> Dedup/Decontam ->
+Format -> Deliver (Engine B) — turn a goal into a provenance-tagged corpus and then
+into a verified, deduplicated dataset with a datasheet. This is also the template for
+injecting *real* backends: swap the in-memory ports for ``Crawl4AIContentFetcher`` /
+``HfDatasetLoader`` and the heuristic generator/judge for ``LlmGenerator`` /
+``LlmJuryPanel`` (the ``agents`` extra).
 
 Run:  uv run python examples/demo_offline.py
 """
@@ -24,13 +26,15 @@ from adh.channels import (
 )
 from adh.contract import SourceChannel, load_job_spec_from_str
 from adh.discovery import AutoApprover, SourceDiscoveryAgent, render_plan
-from adh.orchestration import run_engine_a
+from adh.generation import HeuristicGenerator
+from adh.orchestration import run_engine_a, run_engine_b
 from adh.search import (
     DatasetHit,
     InMemoryDatasetRegistry,
     InMemorySearchProvider,
     SearchHit,
 )
+from adh.verification import HeuristicJudge
 
 SPEC_YAML = """
 name: rust-async-demo
@@ -48,6 +52,7 @@ generator_models: ["anthropic:claude-haiku-4-5"]
 judge_config: { models: ["anthropic:claude-sonnet-4-6", "openai:gpt-judge"] }
 decontaminate_against: ["./eval/heldout_rust_qa.jsonl"]
 output_license: "MIT"
+output_format: "jsonl"
 splits: { train: 0.9, validation: 0.05, test: 0.05 }
 """
 
@@ -141,6 +146,39 @@ def main() -> None:
 
     lineage = json.loads(result.lineage_path.read_text())
     print(f"\nlineage.json: {lineage['counts']} exit={lineage['exit_reason']}")
+
+    # ---- Engine B: corpus -> verified, deduplicated dataset -------------------
+    print("\n" + "=" * 70)
+    print("SYNTHESIS + CURATION (Engine B)")
+    print("=" * 70)
+    # Offline: inject the deterministic generator + jury (production uses the live
+    # LlmGenerator / LlmJuryPanel picked by build_generator/build_judge).
+    b = run_engine_b(
+        spec,
+        work_dir=work_dir,
+        generator=HeuristicGenerator(),
+        judge=HeuristicJudge(),
+    )
+    c = b.counts
+    print(f"exit_reason       : {b.exit_reason}")
+    print(f"records shipped    : {b.n_records}  "
+          f"(from {c['generated']} generated, accept rate {c['accept_rate']:.1%})")
+    print(f"  by split        : {b.delivery.counts_by_split}")
+    print(f"  dropped         : quality={c['dropped_quality']} verifier={c['dropped_verifier']} "
+          f"jury={c['dropped_jury']} dup={c['duplicates']} dead={c['dead_lettered']}")
+    print(f"dataset ({b.delivery.format}) -> {b.dataset_dir}")
+    print(f"  docs            : {', '.join(p.name for p in b.docs)}")
+
+    shards = [f for f in b.delivery.files if f.suffix == ".jsonl"]
+    if shards:
+        first = shards[0].read_text().splitlines()
+        if first:
+            rec = json.loads(first[0])
+            print("\nsample record:")
+            print(f"  input : {rec['input'][:70]}")
+            print(f"  output: {rec['output'][:70]}")
+            print(f"  split={rec['split']} tier={rec['verifiability_tier']} "
+                  f"judge={rec.get('judge_scores')} dedup={rec['dedup_cluster_id']}")
 
 
 if __name__ == "__main__":
