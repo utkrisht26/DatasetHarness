@@ -1,0 +1,66 @@
+# Keyless open-web images recipe — the media-agnostic, no-platform-dependence
+# tier. Openverse (CC / public-domain, anonymous access) plus direct-web HTML
+# harvest supply (image, caption) pairs for captioning / VLM finetuning.
+#
+# License story (two-layer policy):
+#   * known-free licenses (CC-BY / CC0 / public-domain) enter by default;
+#   * `allow_unknown_licenses: true` lets open-web assets with NO declared
+#     license into the dataset, recorded honestly as "unknown";
+#   * `adh publish` REFUSES public uploads while unknown-license assets are
+#     present — keep `distribution_target` unset/private or override explicitly
+#     with --allow-unknown-licenses.
+#
+# Run prerequisites (owner): none beyond core extras — Openverse is keyless.
+#   uv sync --extra web --extra agents --extra deliver
+#
+#   uv run adh run examples/openverse_images.yaml --yes
+#   uv run adh publish examples/openverse_images.yaml --repo-id <you>/images --dry-run
+
+name:              "openverse-images"
+description:       "Landscape photographs with captions from Openverse (CC/public-domain) and the open web, for image-captioning finetuning."
+motivation:        "Media-agnostic acquisition without platform dependence: any page a browser can show becomes a source."
+intended_uses:     ["image-captioning supervised fine-tuning"]
+out_of_scope_uses: ["safety evaluation", "factual benchmark"]
+
+verifiability_tier: 3                  # hybrid: magic-byte media probe + LLM jury on captions
+task_categories:   ["image-captioning", "visual-question-answering"]
+languages:         ["en"]
+modality:          "image"
+target_size:       { records: 100 }
+record_schema_ref: "./schemas/image_caption_record.schema.json"
+
+discovery:
+  mode:           "auto"
+  seeds:          []                  # the MEDIA channel searches Openverse/web per aspect
+  approval_gate:  true
+  channels:       ["media"]           # image jobs never fall back to text-about-images
+  allow_unknown_licenses: true          # open-web pages declare nothing; quarantine OFF
+  constraints:
+    media_types: ["image", "gif"]       # stills + animated GIFs; video stays out
+
+allowed_licenses:  ["CC-BY-4.0", "CC0-1.0", "public-domain"]
+decontaminate_against: ["./eval/heldout_image_captions.jsonl"]   # warning-only until present
+pii_policy:        "redact"
+
+generator_models:  []                  # captions v1 come from source metadata (title/tags/alt)
+judge_config:
+  models:          ["anthropic:claude-haiku-4-5", "openai:gpt-4o-mini"]
+  min_score:       3.5
+  position_swap:   true
+
+dedup_policy:      { method: "exact", scope: "per-shard" }   # keyed on asset sha256
+
+output_format:     "parquet"
+splits:            { train: 0.9, validation: 0.1 }
+output_license:    "CC-BY-4.0"
+delivery_layout:   "hf"                # media/<sha256>.<ext> + parquet/jsonl
+distribution_target: null               # keep null: unknown-license assets block public publish
+maintainer:        "uttkrisht@brilo.ai"
+emit_datasheet:    true
+
+limits:
+  max_pages_scraped: 5000
+  max_llm_tokens:    20000000
+  max_storage_mb:    5000              # images are far lighter than clips
+  max_runtime_seconds: 14400
+  max_cost_usd:      50

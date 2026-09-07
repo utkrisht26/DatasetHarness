@@ -10,7 +10,9 @@ design from the B1 spike, hardened per the engineering review:
 * recovery on *fatal* (browser-dead) errors only — a single slow/bad URL does not
   tear down the shared browser; the old crawler is closed before re-init (no leak)
 * a configurable concurrency semaphore (OOM floor)
-* fetch-time enforcement of robots.txt, domain allow/deny, and a basic SSRF guard
+* fetch-time enforcement of robots.txt, domain allow/deny, and an SSRF guard that
+  covers both literal private addresses *and* hostnames resolving into them
+  (DNS-rebinding defense; see :meth:`CrawlService._check_resolved_host`)
 * idempotent ``close()``
 
 Crawl4AI is an **optional extra** (``adh[web]``): it is imported lazily inside the
@@ -23,16 +25,60 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
+import socket
 import threading
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
-from typing import Callable, Optional, Protocol
+from typing import Awaitable, Callable, Optional, Protocol
 from urllib.parse import urlparse
 
 from .contracts import CrawlRequest, CrawlResponse, Outlink
 
 logger = logging.getLogger(__name__)
+
+
+def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """True if ``ip`` is not publicly routable (SSRF guard predicate).
+
+    Rejects private (RFC1918/ULA), loopback, link-local (including the cloud
+    IMDS at 169.254.169.254), reserved, multicast, and unspecified addresses,
+    plus anything ``ipaddress`` does not consider globally routable. IPv4
+    addresses tunneled inside IPv6 are unwrapped first — IPv4-mapped
+    (``::ffff:a.b.c.d``) and 6to4 (``2002::/16``) — so a private target in an
+    IPv6 wrapper is still caught (e.g. ``::ffff:127.0.0.1``, 6to4-over-IMDS).
+    """
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        elif ip.sixtofour is not None:
+            ip = ip.sixtofour
+    return (
+        not ip.is_global
+        or ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
+async def _default_host_resolver(host: str) -> list[str]:
+    """Resolve ``host`` to its addresses without blocking the event loop.
+
+    Uses ``loop.getaddrinfo`` (the thread-pooled DNS path). Scope ids on
+    link-local v6 results (``fe80::1%eth0``) are stripped so every entry parses.
+    """
+    encoded = host.encode("idna").decode("ascii")
+    loop = asyncio.get_running_loop()
+    infos = await loop.getaddrinfo(
+        encoded, None, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP
+    )
+    return [str(info[4][0]).split("%", 1)[0] for info in infos]
+
+
+HostResolver = Callable[[str], Awaitable[list[str]]]
 
 
 def _echo(request: CrawlRequest) -> dict:
@@ -137,10 +183,13 @@ class CrawlService:
         *,
         crawler_factory: CrawlerFactory | None = None,
         run_config_factory: RunConfigFactory | None = None,
+        host_resolver: HostResolver | None = None,
     ) -> None:
         self.config = config or ServiceConfig()
         self._crawler_factory = crawler_factory or _default_crawler_factory
         self._run_config_factory = run_config_factory or _default_run_config
+        # Injectable for tests; the default resolves via loop.getaddrinfo.
+        self._resolve_host: HostResolver = host_resolver or _default_host_resolver
 
         self._loop = asyncio.new_event_loop()
         self._lock = asyncio.Lock()
@@ -211,25 +260,54 @@ class CrawlService:
 
     @staticmethod
     def _is_private_host(host: str) -> bool:
-        """Block localhost + literal private/loopback/link-local IPs.
+        """Block localhost names + literal addresses in non-routable ranges.
 
-        Intentionally does NOT resolve hostnames: a synchronous ``getaddrinfo`` here
-        would block the event loop and do real DNS. Catching a hostname that *resolves*
-        to a private IP (DNS-rebinding) needs async resolution and is deferred.
+        Literal IPs (including IPv4-mapped / 6to4-wrapped privates) are vetted
+        here synchronously; hostnames get the same predicate applied to their
+        resolved addresses at fetch time — see :meth:`_check_resolved_host`.
         """
         if host in ("localhost", "localhost.localdomain"):
             return True
         try:
             ip = ipaddress.ip_address(host)
         except ValueError:
-            return False  # not a literal IP; treat hostnames as allowed (see docstring)
-        return (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_reserved
-            or ip.is_unspecified
-        )
+            return False  # hostname; resolved and checked later in acrawl
+        return _is_blocked_ip(ip)
+
+    async def _check_resolved_host(self, url: str) -> str | None:
+        """Resolve ``url``'s hostname and reject any non-routable address.
+
+        Closes the DNS half of the SSRF guard: a hostname that *resolves* into a
+        private/loopback/link-local range (cloud IMDS included) is blocked before
+        the browser dials. Resolution runs on this loop via ``getaddrinfo``, so it
+        never blocks the event-loop thread. Residual TOCTOU: the browser resolves
+        independently when it connects, so a rebinding attacker must still win a
+        race inside the check→connect gap — full pinning needs transport-level
+        control Crawl4AI/Playwright does not expose. Browser-internal redirect
+        hops face the same window.
+        """
+        host = (urlparse(url).hostname or "").lower()
+        try:
+            ipaddress.ip_address(host)
+            return None  # literal IP: already vetted synchronously
+        except ValueError:
+            pass
+        try:
+            resolved = await self._resolve_host(host)
+        except (OSError, UnicodeError) as exc:
+            logger.warning("DNS resolution failed for %s (%s): %s", url, host, exc)
+            return f"blocked: could not resolve {host!r} ({exc.__class__.__name__})"
+        for raw in resolved:
+            try:
+                ip = ipaddress.ip_address(raw)
+            except ValueError:
+                continue  # unparseable resolver output; the dial itself will fail
+            if _is_blocked_ip(ip):
+                logger.warning(
+                    "SSRF guard blocked %r: hostname %r resolves to %s", url, host, ip
+                )
+                return f"blocked private/internal address (SSRF guard): {host} resolves to {ip}"
+        return None
 
     # ------------------------------------------------------------------ crawl
     async def acrawl(self, request: CrawlRequest) -> CrawlResponse:
@@ -245,6 +323,10 @@ class CrawlService:
         reason = self._reject_reason(request)
         if reason is not None:
             return CrawlResponse(url=request.url, error=reason, **_echo(request))
+        if self.config.block_private_addresses:
+            reason = await self._check_resolved_host(request.url)
+            if reason is not None:
+                return CrawlResponse(url=request.url, error=reason, **_echo(request))
         if self._pages_scraped >= self.config.max_pages_scraped:
             return CrawlResponse(
                 url=request.url, error="service max_pages_scraped reached", **_echo(request)

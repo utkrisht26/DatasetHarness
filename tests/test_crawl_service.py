@@ -5,12 +5,13 @@ crawler (no crawl4ai install required)."""
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from adh.channels.web.internal.contracts import CrawlRequest
-from adh.channels.web.internal.service import CrawlService, ServiceConfig
+from adh.channels.web.internal.service import CrawlService, ServiceConfig, _is_blocked_ip
 
 
 class _FakeMarkdown:
@@ -199,6 +200,127 @@ def test_max_pages_safety_cap():
         assert r2.error and "max_pages_scraped" in r2.error
     finally:
         svc.close()
+
+
+# ------------------------------------------------------- DNS-resolution SSRF guard
+class _StaticResolver:
+    """Async host resolver backed by a fixed table; unmapped hosts look public."""
+
+    def __init__(self, table: dict[str, list[str]] | None = None):
+        self.table = table or {}
+        self.queries: list[str] = []
+
+    async def __call__(self, host: str) -> list[str]:
+        self.queries.append(host)
+        return self.table.get(host, ["93.184.216.34"])
+
+
+def _resolved_service(factory, resolver, **cfg) -> CrawlService:
+    return CrawlService(
+        ServiceConfig(**cfg),
+        crawler_factory=factory,
+        run_config_factory=_no_run_config,
+        host_resolver=resolver,
+    )
+
+
+@pytest.mark.parametrize(
+    "resolved_ip,label",
+    [
+        ("169.254.169.254", "cloud IMDS"),
+        ("10.0.0.5", "RFC1918 private"),
+        ("127.0.0.1", "loopback"),
+        ("::ffff:10.0.0.5", "IPv4-mapped private"),
+        ("2002:a9fe:a9fe::1", "6to4-wrapped IMDS"),
+        ("fd00::5", "IPv6 unique-local"),
+    ],
+)
+def test_hostname_resolving_to_blocked_address_is_rejected(resolved_ip, label):
+    """A hostname that *resolves* into a non-routable range is blocked before the
+    browser dials — the DNS half of the SSRF guard (rebinding defense)."""
+    fake = FakeCrawler()
+    resolver = _StaticResolver({"rebind.example.com": [resolved_ip]})
+    svc = _resolved_service(lambda: fake, resolver)
+    try:
+        r = svc.crawl(_req("http://rebind.example.com/page"))
+        assert r.error and "private/internal" in r.error, f"{label}: {r.error}"
+        assert fake.calls == 0  # browser never dialed
+    finally:
+        svc.close()
+
+
+def test_publicly_resolving_hostname_is_fetched():
+    fake = FakeCrawler()
+    resolver = _StaticResolver({"example.com": ["93.184.216.34"]})
+    svc = _resolved_service(lambda: fake, resolver)
+    try:
+        r = svc.crawl(_req())
+        assert r.error is None
+        assert fake.calls == 1
+        assert resolver.queries == ["example.com"]
+    finally:
+        svc.close()
+
+
+def test_literal_ip_urls_skip_the_resolver():
+    fake = FakeCrawler()
+    resolver = _StaticResolver()
+    svc = _resolved_service(lambda: fake, resolver)
+    try:
+        r = svc.crawl(_req("https://93.184.216.34/page"))
+        assert r.error is None  # public literal passes the sync guard
+        assert resolver.queries == []  # nothing left to resolve
+    finally:
+        svc.close()
+
+
+def test_unresolvable_hostname_fails_without_dialing():
+    import socket as _socket
+
+    async def dead_resolver(host):
+        raise _socket.gaierror(-2, "Name or service not known")
+
+    fake = FakeCrawler()
+    svc = _resolved_service(lambda: fake, dead_resolver)
+    try:
+        r = svc.crawl(_req("http://gone.example.com/x"))
+        assert r.error and "resolve" in r.error
+        assert fake.calls == 0
+    finally:
+        svc.close()
+
+
+def test_block_private_off_disables_resolution_guard():
+    """block_private_addresses=False opts out end-to-end: no resolution, no block."""
+    fake = FakeCrawler()
+    resolver = _StaticResolver({"rebind.example.com": ["169.254.169.254"]})
+    svc = _resolved_service(lambda: fake, resolver, block_private_addresses=False)
+    try:
+        r = svc.crawl(_req("http://rebind.example.com/page"))
+        assert r.error is None
+        assert resolver.queries == []
+    finally:
+        svc.close()
+
+
+# --------------------------------------------------------------- blocked-IP predicate
+@pytest.mark.parametrize(
+    "addr,blocked",
+    [
+        ("8.8.8.8", False),
+        ("2606:4700::1111", False),
+        ("192.168.1.10", True),
+        ("169.254.169.254", True),
+        ("224.0.0.1", True),  # multicast
+        ("0.0.0.0", True),  # unspecified
+        ("fc00::1", True),  # IPv6 unique-local
+        ("ff02::1", True),  # IPv6 multicast
+        ("::ffff:192.168.1.10", True),  # IPv4-mapped private unwrap
+        ("2002:7f00:0001::", True),  # 6to4 over loopback unwrap
+    ],
+)
+def test_blocked_ip_predicate(addr, blocked):
+    assert _is_blocked_ip(ipaddress.ip_address(addr)) is blocked
 
 
 def test_close_is_idempotent():

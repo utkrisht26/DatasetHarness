@@ -1,0 +1,60 @@
+# The b6b176e6 follow-up: the dance image-to-video training set, expressed as a
+# full Job Spec. Delivers (clip, caption) triplets in the LTX-Video trainer
+# layout — videos/ + aligned metadata.jsonl + prompts.txt — ready to fine-tune.
+#
+# Live run prerequisites (owner):
+#   export PEXELS_API_KEY=<free key from https://www.pexels.com/api/>
+#   uv sync --extra web --extra media --extra agents --extra deliver
+#
+#   uv run adh run examples/dance_i2v_ltx.yaml --yes
+#   uv run adh publish examples/dance_i2v_ltx.yaml --repo-id <you>/dance-i2v-ltx --dry-run
+
+name:              "dance-i2v-ltx"
+description:       "Licensed stock clips of couples dancing with captions, for LTX-2.3 image-to-video finetuning."
+motivation:        "The original harness run delivered text ABOUT the domain; this spec delivers the actual (video, caption) training pairs."
+intended_uses:     ["image-to-video supervised fine-tuning"]
+out_of_scope_uses: ["safety evaluation", "factual benchmark"]
+
+verifiability_tier: 3                  # hybrid: deterministic media probe + jury on captions
+task_categories:   ["image-to-video", "video-generation"]
+languages:         ["en"]
+modality:          "video"
+target_size:       { records: 200 }
+record_schema_ref: "./schemas/video_caption_record.schema.json"
+
+discovery:
+  mode:           "auto"
+  seeds:          []                  # the MEDIA channel searches Pexels per aspect
+  approval_gate:  true
+  channels:       ["media"]           # video jobs never fall back to text-about-video
+  constraints:
+    media_min_duration_s: 3           # trainers want clips long enough to slice
+    media_max_duration_s: 20
+    media_orientation:    "landscape"
+
+allowed_licenses:  ["Pexels-License"]
+decontaminate_against: ["./eval/heldout_dance_captions.jsonl"]   # warning-only until present
+pii_policy:        "redact"
+
+generator_models:  []                 # v1 captions come from source metadata; MediaPackager is deterministic
+judge_config:
+  models:          ["anthropic:claude-haiku-4-5", "openai:gpt-4o-mini"]
+  min_score:       3.5
+  position_swap:   true
+
+dedup_policy:      { method: "exact", scope: "per-shard" }   # keyed on clip sha256 for video jobs
+
+output_format:     "parquet"
+splits:            { train: 0.9, validation: 0.1 }
+output_license:    "CC-BY-4.0"
+delivery_layout:   "ltx"              # videos/<i>_<sha8>.mp4 + metadata.jsonl + prompts.txt
+distribution_target: null                # set before `adh publish`
+maintainer:        "uttkrisht@brilo.ai"
+emit_datasheet:    true
+
+limits:
+  max_pages_scraped: 5000
+  max_llm_tokens:    50000000
+  max_storage_mb:    20000             # clips are the storage driver — raise for larger runs
+  max_runtime_seconds: 28800
+  max_cost_usd:      150
