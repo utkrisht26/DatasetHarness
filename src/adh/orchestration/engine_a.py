@@ -49,9 +49,11 @@ from adh.provenance import build_lineage, write_lineage
 
 from .limits import CircuitBreaker, RunMetrics
 from .run_store import (
+    RUN_FILE,
     SUCCESS_EXIT_REASONS,
     RunRecord,
     RunStatus,
+    fresh_run_id,
     load_plan,
     load_record,
     load_spec,
@@ -62,6 +64,10 @@ from .run_store import (
 )
 from .saturation import SaturationTracker
 from .state import JobState, load_state, save_state
+
+# Frontier channels the saturation governor may cut short (1.4): web crawls and
+# media downloads both stream open-ended content for an aspect.
+_SATURATION_CHANNELS = frozenset({SourceChannel.WEB, SourceChannel.MEDIA})
 
 
 @dataclass
@@ -109,14 +115,19 @@ def plan_run(
     agent: DiscoveryAgent | None = None,
     usage: UsageTracker | None = None,
     resume: bool = True,
+    run_id: str | None = None,
 ) -> PlannedRun:
     """Discover sources for ``spec`` and park the run at the approval gate.
 
     Persists ``spec.json`` + ``plan.json`` + the run record into ``work_dir`` so the
     pause survives a restart. Discovery LLM spend recorded in ``usage`` is folded
     into the durable :class:`RunMetrics`; if that already trips the circuit
-    breaker (``max_llm_tokens`` is the enforced ceiling), the run is marked
-    ``failed`` instead of awaiting approval.
+    breaker (``max_llm_tokens``/``max_cost_usd``), a usable plan is still parked
+    at ``awaiting_approval`` with the breaker noted — discovery was paid for, so
+    a human decides whether to proceed. Only an empty plan fails the run here.
+
+    ``run_id`` defaults to a unique ``{safe(job_id)}-{suffix}`` (same scheme as
+    :meth:`RunStore.create`) so two runs of one spec can never collide.
     """
     work = Path(work_dir)
     work.mkdir(parents=True, exist_ok=True)
@@ -124,7 +135,7 @@ def plan_run(
     agent = agent or SourceDiscoveryAgent()
     job_id = spec.job_id or spec.name
 
-    record = load_record(work) or new_record(run_id=job_id, job_id=job_id)
+    record = load_record(work) or new_record(run_id=run_id or fresh_run_id(job_id), job_id=job_id)
     save_spec(work, spec)
     record = save_record(work, record)
 
@@ -139,11 +150,18 @@ def plan_run(
     save_state(work, state)
     save_plan(work, plan)
 
-    # ---- pre-approval breaker check: discovery LLM spend over budget -> FAILED.
-    # Only the two spend limits fail the run here; pages/storage/runtime caps are
-    # acquisition concerns and still gate every fetch inside resume_run.
+    # ---- pre-approval breaker check: discovery spend over the ceiling.
+    # Only the two spend limits gate here; pages/storage/runtime caps are
+    # acquisition concerns and still gate every fetch inside resume_run. A usable
+    # plan is parked for review (the spend already happened — discarding it would
+    # waste paid discovery); an empty plan has nothing worth reviewing -> FAILED.
     trip = CircuitBreaker(spec.limits).check(state.metrics)
     if trip is not None and trip.reason in ("max_llm_tokens", "max_cost_usd"):
+        if plan.sources or plan.synthesis_aspects:
+            state.notes = list(state.notes) + [f"circuit breaker at discovery: {trip} — plan kept for review"]
+            save_state(work, state)
+            record = save_record(work, replace(record, status=RunStatus.AWAITING_APPROVAL))
+            return PlannedRun(record=record, plan=plan, work_dir=work)
         state.notes = list(state.notes) + [f"circuit breaker at discovery: {trip}"]
         state.exit_reason = trip.reason
         save_state(work, state)
@@ -165,6 +183,7 @@ def resume_run(
     store: CorpusStore | None = None,
     resume: bool = True,
     max_items_per_source: int = 50,
+    should_cancel: Callable[[], bool] | None = None,
     clock_seconds: Callable[[], float] = time.monotonic,
     wallclock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
 ) -> EngineAResult:
@@ -174,6 +193,9 @@ def resume_run(
     ``FileNotFoundError`` if either is missing), re-checks the circuit breaker
     before any fetch (discovery tokens already count), and reuses the per-source
     breaker + saturation stop + ``state.mark_done`` resume machinery.
+    ``should_cancel`` is polled between sources; when it fires the loop stops with
+    exit reason ``cancelled`` and the record lands at CANCELLED — an operator's
+    cancel also wins over a racing terminal write.
     """
     work = Path(work_dir)
     spec = load_spec(work)
@@ -183,8 +205,10 @@ def resume_run(
     if plan is None:
         raise FileNotFoundError(f"no {work / 'plan.json'} — run plan_run() first")
 
-    job_id = spec.job_id or spec.name
-    record = load_record(work) or new_record(run_id=job_id, job_id=job_id)
+    record = load_record(work)
+    if record is None:
+        # never fabricate: a missing record means broken/corrupted history
+        raise FileNotFoundError(f"no {work / RUN_FILE} — run plan_run() first")
     record = save_record(work, replace(record, status=RunStatus.ACQUIRING))
 
     try:
@@ -197,6 +221,7 @@ def resume_run(
             store=store or LocalCorpusStore(work / "corpus"),
             resume=resume,
             max_items_per_source=max_items_per_source,
+            should_cancel=should_cancel,
             clock_seconds=clock_seconds,
             wallclock=wallclock,
         )
@@ -207,12 +232,19 @@ def resume_run(
         )
         raise
 
-    terminal = (
-        RunStatus.SUCCEEDED
-        if result.exit_reason in SUCCESS_EXIT_REASONS
-        else RunStatus.FAILED
+    current = load_record(work)
+    cancelled_in_flight = current is not None and current.status is RunStatus.CANCELLED
+    if result.exit_reason == "cancelled" or cancelled_in_flight:
+        terminal = RunStatus.CANCELLED  # operator cancel beats the outcome
+    else:
+        terminal = (
+            RunStatus.SUCCEEDED
+            if result.exit_reason in SUCCESS_EXIT_REASONS
+            else RunStatus.FAILED
+        )
+    save_record(
+        work, replace(current or record, status=terminal, exit_reason=result.exit_reason)
     )
-    save_record(work, replace(record, status=terminal, exit_reason=result.exit_reason))
     return result
 
 
@@ -267,6 +299,7 @@ def _acquire(
     store: CorpusStore,
     resume: bool,
     max_items_per_source: int,
+    should_cancel: Callable[[], bool] | None = None,
     clock_seconds: Callable[[], float],
     wallclock: Callable[[], datetime],
 ) -> EngineAResult:
@@ -309,12 +342,18 @@ def _acquire(
         max_items_per_source=max_items_per_source,
         clock=wallclock,
         governor=governor,
+        staging_root=work / "media_staging",
     )
 
     for source in approved.sources:
         sid = source.source_id
         if state.is_done(sid):
             continue  # resume: already fetched
+
+        if should_cancel is not None and should_cancel():
+            exit_reason = "cancelled"
+            notes.append("cancelled by operator between sources")
+            break
 
         elapsed = clock_seconds() - start
         trip = breaker.check(metrics, storage_mb=_storage_mb(store, job_id), elapsed_seconds=elapsed)
@@ -324,8 +363,9 @@ def _acquire(
             break
 
         aspect_id = source.candidate.aspect_id
-        # 1.4 coverage-saturation: skip remaining WEB sources for a saturated aspect
-        if source.channel == SourceChannel.WEB and governor.should_stop(aspect_id):
+        # 1.4 coverage-saturation: skip remaining frontier sources (web crawl /
+        # media downloads) for a saturated aspect
+        if source.channel in _SATURATION_CHANNELS and governor.should_stop(aspect_id):
             notes.append(f"skip {sid}: aspect {aspect_id!r} already saturated")
             continue
 
@@ -341,9 +381,9 @@ def _acquire(
         metrics = metrics.add_pages(len(fetched))
         state.mark_done(sid)
 
-        # note the first time a web aspect crosses the saturation line
+        # note the first time an aspect crosses the saturation line
         if (
-            source.channel == SourceChannel.WEB
+            source.channel in _SATURATION_CHANNELS
             and governor.should_stop(aspect_id)
             and aspect_id not in noted_saturated
         ):
@@ -420,11 +460,15 @@ def _storage_mb(store: CorpusStore, job_id: str) -> float:
 
 def _load_prior_chunks(manifest_path: Path, store: CorpusStore) -> list[CorpusChunk]:
     out: list[CorpusChunk] = []
-    for line in manifest_path.read_text(encoding="utf-8").splitlines():
+    for n, line in enumerate(manifest_path.read_text(encoding="utf-8").splitlines(), start=1):
         line = line.strip()
         if not line:
             continue
-        row = json.loads(line)
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            # a torn/corrupt manifest means provenance is broken — surface it
+            raise ValueError(f"corrupt {manifest_path.name} line {n}: {exc}") from exc
         if row.get("kind") != "chunk":
             continue
         preview = ""

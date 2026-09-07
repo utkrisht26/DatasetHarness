@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 
 
 from adh.contract import JobSpec
@@ -129,6 +131,83 @@ def test_engine_b_resume_reuses_verified(minimal_spec_dict, tmp_path):
     assert any("resumed" in n for n in second.notes)
 
 
+# --------------------------------------------------------------------- stranded-resume recovery
+def test_engine_b_resume_regenerates_stranded_seeds(minimal_spec_dict, tmp_path):
+    """A prior build that marked seeds complete but generated nothing (provider outage)
+    must not be re-skipped forever — resume clears the stranded bookkeeping and rebuilds."""
+    spec = _spec(minimal_spec_dict, target_size={"records": 4})
+    _seed_corpus(spec, tmp_path)
+    (tmp_path / "engine_b_state.json").write_text(
+        json.dumps(
+            {
+                "job_id": spec.job_id or spec.name,
+                "completed_seed_ids": ["stranded:a0:x:0", "stranded:a1:y:1"],
+                "metrics": {},
+                "counters": {},
+                "notes": [],
+            }
+        )
+    )
+
+    result = _run_b(spec, tmp_path)
+
+    assert result.n_records > 0
+    assert any("generated nothing" in n for n in result.notes)
+    state = json.loads((tmp_path / "engine_b_state.json").read_text())
+    assert state["completed_seed_ids"]  # this build re-marked the regenerated seeds
+
+
+def test_engine_b_resume_keeps_completed_seeds_with_generation_history(minimal_spec_dict, tmp_path):
+    """Bookkeeping backed by real generation (counters.generated > 0) is honest work:
+    resume still skips those seeds even when no candidate survived curation."""
+    spec = _spec(minimal_spec_dict, target_size={"records": 4})
+    _seed_corpus(spec, tmp_path)
+    first = _run_b(spec, tmp_path)
+    assert first.n_records > 0
+    # simulate "everything generated was later dropped": keep bstate, drop the journal
+    (tmp_path / "engine_b_verified.jsonl").unlink()
+
+    second = _run_b(spec, tmp_path)
+
+    assert second.n_records == 0
+    assert not any("generated nothing" in n for n in second.notes)
+
+
+def test_engine_b_persists_counters_through_total_generation_failure(minimal_spec_dict, tmp_path):
+    """An all-seeds-failed build leaves evidence on disk — counters land in bstate and
+    the summary names the exhaustion instead of exiting 'no_records' in silence."""
+    spec = _spec(minimal_spec_dict, target_size={"records": 3})
+    _seed_corpus(spec, tmp_path)
+
+    class ExplodingGenerator:
+        def generate(self, seed, *, spec, store=None):
+            raise RuntimeError("provider down")
+
+    result = _run_b(spec, tmp_path, generator=ExplodingGenerator())
+
+    assert result.n_records == 0
+    state = json.loads((tmp_path / "engine_b_state.json").read_text())
+    assert state["counters"]["generation_errors"] >= 1
+    summary = json.loads((tmp_path / "engine_b_summary.json").read_text())
+    assert summary["counts"]["generation_errors"] >= 1
+
+
+def test_engine_b_logs_generation_progress(minimal_spec_dict, tmp_path, caplog):
+    """A multi-hour build must be observable: announce the work, then log each seed."""
+    import logging
+
+    spec = _spec(minimal_spec_dict, target_size={"records": 4})
+    _seed_corpus(spec, tmp_path)
+
+    with caplog.at_level(logging.INFO, logger="adh.orchestration.engine_b"):
+        _run_b(spec, tmp_path)
+
+    msgs = [r.message for r in caplog.records]
+    assert any("seed(s) to generate" in m for m in msgs)
+    progress = [m for m in msgs if "engine B progress" in m]
+    assert progress  # at least one per-seed line
+
+
 # --------------------------------------------------------------------- corpus loader
 def test_load_corpus_reads_manifest(minimal_spec_dict, tmp_path):
     from adh.corpus import LocalCorpusStore
@@ -138,3 +217,22 @@ def test_load_corpus_reads_manifest(minimal_spec_dict, tmp_path):
     chunks, handoffs = load_corpus(tmp_path, LocalCorpusStore(tmp_path / "corpus"))
     assert chunks  # web channel produced at least one chunk
     assert all(c.source_url for c in chunks)
+
+
+# --------------------------------------------------------------------- quality report integration
+def test_engine_b_attaches_quality_report(minimal_spec_dict, tmp_path):
+    """Every build ships an offline quality card: summary carries it, and a
+    markdown copy lands beside the dataset for the publish flow to upload."""
+    spec = _spec(minimal_spec_dict, target_size={"records": 12})
+    _seed_corpus(spec, tmp_path)
+
+    result = _run_b(spec, tmp_path)
+
+    assert result.quality_report is not None
+    q = result.quality_report
+    assert q.total_records == result.n_records
+    assert 0.0 <= q.duplicate_rate <= 1.0
+    summary = json.loads((tmp_path / "engine_b_summary.json").read_text())
+    assert summary["quality"]["total_records"] == result.n_records
+    md = tmp_path / "dataset" / "quality_report.md"
+    assert md.exists() and "| total_records |" in md.read_text()

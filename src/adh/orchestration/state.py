@@ -10,11 +10,14 @@ guarantee at the graph level; this is the equivalent for the offline pipeline.)
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .limits import RunMetrics
+
+logger = logging.getLogger(__name__)
 
 
 def atomic_write_text(path: Path, text: str) -> None:
@@ -67,15 +70,32 @@ def state_path(work_dir: Path) -> Path:
 
 
 def load_state(work_dir: Path, job_id: str) -> JobState:
-    """Load prior state for ``job_id`` if present and matching; else a fresh state."""
+    """Load prior state for ``job_id`` if present and matching; else a fresh state.
+
+    Read paths must survive a torn file, so corruption never raises — but the
+    lost checkpoint (completed sources + breaker metrics) is announced loudly:
+    silently resetting it would quietly lift the run's spend ceilings.
+    """
     p = state_path(work_dir)
     if p.exists():
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
             if data.get("job_id") == job_id:
                 return JobState.from_dict(data)
-        except (json.JSONDecodeError, KeyError, OSError):
-            pass
+            logger.warning(
+                "%s holds state for job %r, expected %r — starting fresh",
+                p,
+                data.get("job_id"),
+                job_id,
+            )
+            return JobState(job_id=job_id)
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning(
+                "%s is unreadable (%s) — starting fresh; the prior checkpoint "
+                "(completed sources, metrics) is lost",
+                p,
+                exc,
+            )
     return JobState(job_id=job_id)
 
 
