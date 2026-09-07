@@ -17,10 +17,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
-from adh.contract import DiscoveryMode, JobSpec, SourceChannel
+from adh.contract import (
+    DiscoveryMode,
+    JobSpec,
+    SourceChannel,
+    is_media_modality,
+    resolved_media_types,
+)
+from adh.contract.licenses import normalize_license
 from adh.llm import AspectDraft, HeuristicLLMProvider, LLMProvider
 from adh.search import (
     DatasetHit,
@@ -32,6 +39,9 @@ from adh.search import (
 )
 
 from .models import Aspect, CandidateSource, FetchPlan, RankedSource, SourceEvaluation
+
+if TYPE_CHECKING:
+    from adh.channels.media import MediaProvider
 
 
 @runtime_checkable
@@ -56,6 +66,7 @@ class DiscoveryConfig:
     max_candidates_per_aspect: int = 8
     dataset_shape_threshold: float = 0.35  # reuse a dataset only if it plausibly matches
     web_shape_threshold: float = 0.15  # crawl when no dataset, lower bar
+    media_shape_threshold: float = 0.15  # stock clips: same low bar as crawling
     # ranking weights
     w_shape: float = 0.5
     w_quality: float = 0.3
@@ -77,6 +88,10 @@ class SourceDiscoveryAgent:
     llm: LLMProvider = field(default_factory=HeuristicLLMProvider)
     search: SearchProvider = field(default_factory=InMemorySearchProvider)
     registry: DatasetRegistry = field(default_factory=InMemoryDatasetRegistry)
+    # MEDIA channel port (media provider). None means the host has no media
+    # stack — media-modality jobs then degrade to a loud coverage gap, never to
+    # a text-about-media crawl.
+    media_provider: MediaProvider | None = None
     config: DiscoveryConfig = field(default_factory=DiscoveryConfig)
 
     # ------------------------------------------------------------------ public
@@ -97,6 +112,11 @@ class SourceDiscoveryAgent:
             if channel == SourceChannel.SYNTHESIS:
                 synthesis_aspects.append(aspect)
                 notes.append(f"aspect {aspect.aspect_id!r} routed to synthesis (model-known)")
+            elif channel == SourceChannel.MEDIA and not sources:
+                notes.append(
+                    f"aspect {aspect.aspect_id!r} routed to MEDIA but produced no sources "
+                    "(no media provider configured, or no clips passed evaluation) — coverage gap"
+                )
             elif sources:
                 ranked.extend(sources)
             else:
@@ -170,6 +190,21 @@ class SourceDiscoveryAgent:
         exclude = exclude_locators or set()
         draft = AspectDraft(aspect.topic, aspect.rationale, aspect.keywords)
 
+        # 0) media channel (media modalities: video/image): real assets, before
+        #    any text path. Without a configured provider this reports a loud gap
+        #    rather than silently crawling text *about* the media (the b6b176e6
+        #    failure mode).
+        if is_media_modality(spec.modality) and SourceChannel.MEDIA in channels:
+            if self.media_provider is not None:
+                media = self._media_for(aspect, draft, spec, exclude)
+                passing = [
+                    s for s in media
+                    if s.evaluation.shape_match >= self.config.media_shape_threshold
+                ]
+                if passing:
+                    return SourceChannel.MEDIA, passing
+            return SourceChannel.MEDIA, []
+
         # 1) datasets channel (reuse first)
         if SourceChannel.DATASETS in channels:
             ds = self._datasets_for(aspect, draft, spec, exclude)
@@ -233,6 +268,37 @@ class SourceDiscoveryAgent:
                     discovered_via=query,
                 )
                 out.append(self._evaluate(cand, draft, spec, hit.snippet))
+        return out
+
+    def _media_for(
+        self, aspect: Aspect, draft: AspectDraft, spec: JobSpec, exclude: set[str]
+    ) -> list[RankedSource]:
+        """Media-asset candidates; locator = search query (the channel re-searches)."""
+        assert self.media_provider is not None  # guarded by the routing branch
+        wanted = resolved_media_types(spec.modality, constraints=spec.discovery.constraints)
+        out: list[RankedSource] = []
+        seen_ids: set[str] = set()
+        for query in self.llm.queries(draft, n=self.config.queries_per_aspect):
+            for hit in self.media_provider.search(
+                query,
+                limit=self.config.max_candidates_per_aspect,
+                media_types=tuple(sorted(wanted)),
+            ):
+                if hit.media_id in seen_ids or hit.page_url in exclude:
+                    continue
+                seen_ids.add(hit.media_id)
+                snippet = f"{hit.title} {', '.join(hit.tags)}".strip()
+                cand = CandidateSource(
+                    source_id=f"{aspect.aspect_id}:media:{hit.media_id}",
+                    channel=SourceChannel.MEDIA,
+                    locator=query,
+                    title=hit.title,
+                    aspect_id=aspect.aspect_id,
+                    snippet=snippet,
+                    license=hit.license,
+                    discovered_via=query,
+                )
+                out.append(self._evaluate(cand, draft, spec, snippet))
         return out
 
     # ------------------------------------------------------------------ eval
@@ -310,9 +376,14 @@ def target_shape(spec: JobSpec) -> str:
 
 def license_ok(license_: str | None, spec: JobSpec) -> bool:
     if not license_:
-        return False  # unknown license -> quarantine candidate (§0.8.3)
-    allowed = {lic.lower() for lic in spec.allowed_licenses}
-    return license_.lower() in allowed
+        return False  # missing info is not a declared unknown — stay quarantined
+    normalized = normalize_license(license_)
+    if normalized == "unknown":
+        # Two-layer policy: open-web sources with unknown licenses only enter
+        # when the spec explicitly opted in (distribution consent stays separate).
+        return bool(spec.discovery.allow_unknown_licenses)
+    allowed = {normalize_license(lic).lower() for lic in spec.allowed_licenses}
+    return normalized.lower() in allowed
 
 
 def freshness_ok(published: str | None, spec: JobSpec) -> bool:
@@ -370,7 +441,12 @@ def fixed_plan(spec: JobSpec, job_id: str, notes: list[str]) -> FetchPlan:
     """Degenerate mode: the user gave exact sources — just wrap them as a plan."""
     ranked: list[RankedSource] = []
     for i, seed in enumerate(spec.discovery.seeds):
-        channel = SourceChannel.DATASETS if seed.startswith("hf://") else SourceChannel.WEB
+        if seed.startswith("hf://"):
+            channel = SourceChannel.DATASETS
+        elif seed.startswith(("pexels://", "media://")):
+            channel = SourceChannel.MEDIA
+        else:
+            channel = SourceChannel.WEB
         cand = CandidateSource(
             source_id=f"fixed:{i}",
             channel=channel,

@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import BaseModel, Field
 
@@ -63,11 +63,25 @@ logger = logging.getLogger(__name__)
 
 # Generous headroom for decompose -> per-aspect search -> sample -> judge, but a
 # hard stop for a model stuck re-calling tools (plan §failure-modes).
-DEFAULT_RECURSION_LIMIT = 50
+DEFAULT_RECURSION_LIMIT = 1500
+
+# An upstream provider can return a well-formed-but-EMPTY completion (HTTP 200,
+# no text, no tool calls, not even usage metadata — observed live via OpenRouter
+# routing). That is a transient upstream fault, not a verdict on the task, so the
+# whole research invocation is retried this many times before giving up.
+EMPTY_COMPLETION_RETRIES = 2
 
 
 class DiscoveryAgentError(RuntimeError):
     """The deep agent could not produce a structured discovery report."""
+
+
+class DiscoveryBudgetExceeded(RuntimeError):
+    """The discovery token budget was exhausted before a report was produced.
+
+    Raised between model turns (never mid-call), so every token already spent is
+    metered and folded into the run's :class:`UsageTracker`.
+    """
 
 
 # ------------------------------------------------------- the agent's wire format
@@ -121,11 +135,27 @@ class DiscoveryReport(BaseModel):
 
 # ------------------------------------------------------------- tools over ports
 def build_discovery_tools(
-    search: SearchProvider, registry: DatasetRegistry, work_dir: Path, *, limit: int = 8
+    search: SearchProvider,
+    registry: DatasetRegistry,
+    work_dir: Path,
+    *,
+    limit: int = 8,
+    budget_status: Callable[[], str] | None = None,
 ) -> list:
-    """Wrap the existing search/registry ports as agent tools (no MCP)."""
+    """Wrap the existing search/registry ports as agent tools (no MCP).
+
+    ``budget_status`` optionally supplies a one-line spend summary appended to
+    every tool result — the soft nudge that lets the model wrap up on its own
+    before the hard :class:`DiscoveryBudgetExceeded` guard fires.
+    """
 
     counters = {"web": 0, "dataset": 0}
+
+    def _nudge(text: str) -> str:
+        if budget_status is None:
+            return text
+        line = budget_status()
+        return f"{text}\n\n[budget] {line}" if line else text
 
     def web_search(query: str) -> str:
         """Search the web for candidate pages. Returns a virtual file path reference."""
@@ -150,7 +180,7 @@ def build_discovery_tools(
         with open(abs_path, "w", encoding="utf-8") as f:
             json.dump({"query": query, "results": results}, f, indent=2)
 
-        return (
+        return _nudge(
             f"Search results for query '{query}' (found {len(results)} results) "
             f"have been saved to virtual path '{rel_path}'. "
             f"You MUST use the `read_file` tool to read '{rel_path}' sequentially "
@@ -182,7 +212,7 @@ def build_discovery_tools(
         with open(abs_path, "w", encoding="utf-8") as f:
             json.dump({"query": query, "results": results}, f, indent=2)
 
-        return (
+        return _nudge(
             f"Dataset search results for query '{query}' (found {len(results)} results) "
             f"have been saved to virtual path '{rel_path}'. "
             f"You MUST use the `read_file` tool to read '{rel_path}' sequentially "
@@ -205,8 +235,9 @@ def build_discovery_tools(
         with open(abs_path, "w", encoding="utf-8") as f:
             f.write(sample)
 
-        return (
-            f"Sample content for dataset '{dataset_id}' has been saved to virtual path '{rel_path}'. "
+        return _nudge(
+            f"Sample content for dataset '{dataset_id}' has been saved to virtual path "
+            f"'{rel_path}'. "
             f"You MUST use the `read_file` tool to view the content of '{rel_path}'."
         )
 
@@ -219,15 +250,55 @@ def _short(text: object, limit: int = 160) -> str:
     return s if len(s) <= limit else s[: limit - 1] + "…"
 
 
-def _build_tracer(tracker: UsageTracker | None):
-    """A LangChain callback that meters tokens AND traces every agent step.
+def _assistant_said_nothing(message: Any) -> bool:
+    """True when a reply carries neither text nor tool calls (an empty completion).
 
-    Two jobs in one handler so there is a single ``on_llm_end`` pass:
+    Duck-typed on the message shape so this module stays importable without
+    LangChain installed; anything that is not an AIMessage is not "nothing".
+    """
+    if message is None or getattr(message, "tool_calls", None):
+        return False
+    if type(message).__name__ != "AIMessage":
+        return False
+    content = getattr(message, "content", "")
+    if isinstance(content, str):
+        return not content.strip()
+    # content can also be a list of typed blocks; any non-empty text counts as speech
+    return not any(
+        (isinstance(block, str) and block.strip())
+        or (isinstance(block, dict) and str(block.get("text") or "").strip())
+        for block in content
+    )
+
+
+def _describe_final_turn(message: Any) -> str:
+    """One-line diagnosis of why the final turn produced no report."""
+    if _assistant_said_nothing(message):
+        return (
+            "final model turn was an empty completion "
+            "(no text, no tool calls — likely a transient upstream/provider issue)"
+        )
+    if message is None:
+        return "no messages returned"
+    reply = getattr(message, "content", "")
+    return f"final model turn replied in prose ({_short(reply)}) without emitting a DiscoveryReport"
+
+
+def _build_tracer(tracker: UsageTracker | None, budget: int | None = None):
+    """A LangChain callback that meters tokens, traces every step, AND enforces budget.
+
+    Three jobs in one handler so there is a single ``on_llm_end`` pass:
 
     * **Metering** (always, when a ``tracker`` is given): folds each reply's
       usage — including provider-surfaced cost — into the run's
       :class:`UsageTracker`, so spend is captured even when the loop later errors
       or hits the recursion cap (decision 4: cost is real or unknown).
+    * **Budget enforcement** (when a ``budget`` is given): right after folding a
+      turn whose cumulative spend reaches the ceiling, raises
+      :class:`DiscoveryBudgetExceeded` — the loop stops at spend, not only at
+      the recursion limit, and every token already spent stays metered.
+      ``raise_error = True`` makes handler exceptions propagate instead of being
+      swallowed by the callback manager.
     * **Tracing** (always): logs each tool call, model turn with a running token
       total, and subagent step to the ``adh.discovery`` logger. These are INFO/
       DEBUG, so they surface only when logging is configured (``adh --verbose`` /
@@ -240,6 +311,9 @@ def _build_tracer(tracker: UsageTracker | None):
     from langchain_core.callbacks import BaseCallbackHandler
 
     class _AgentTracer(BaseCallbackHandler):
+        # propagate handler exceptions (the budget guard) out of the model call
+        raise_error = True
+
         def __init__(self) -> None:
             self.turns = 0
             self.tool_calls = 0
@@ -273,6 +347,10 @@ def _build_tracer(tracker: UsageTracker | None):
             logger.info(
                 "deep-agent · model turn %d (+%d tok, %d total)", self.turns, delta, total
             )
+            if budget is not None and tracker is not None and total >= budget:
+                raise DiscoveryBudgetExceeded(
+                    f"discovery token budget exhausted: {total}/{budget} tokens used"
+                )
 
         def on_llm_error(self, error, **kwargs) -> None:
             logger.warning("deep-agent ✗ model error: %s", _short(error))
@@ -297,6 +375,7 @@ class DeepAgentDiscoveryAgent:
     config: DiscoveryConfig = field(default_factory=DiscoveryConfig)
     usage: UsageTracker | None = None
     recursion_limit: int = DEFAULT_RECURSION_LIMIT
+    token_budget: int | None = None  # None -> derive from spec.limits.max_llm_tokens
 
     def discover(self, spec: JobSpec, work_dir: Path) -> FetchPlan:
         job_id = spec.job_id or spec.name
@@ -307,51 +386,97 @@ class DeepAgentDiscoveryAgent:
         report = self._run_agent(spec, job_id, work_dir)
         return self._to_plan(report, spec, job_id)
 
+    def _effective_budget(self, spec: JobSpec) -> int | None:
+        """Explicit ``token_budget`` wins; otherwise the spec's LLM ceiling."""
+        if self.token_budget is not None:
+            return max(int(self.token_budget), 0)
+        limit = getattr(spec.limits, "max_llm_tokens", None)
+        return int(limit) if limit else None
+
     # ---------------------------------------------------------------- research
     def _run_agent(self, spec: JobSpec, job_id: str, work_dir: Path) -> DiscoveryReport:
-        graph = self._build_graph(work_dir)
+        budget = self._effective_budget(spec)
+        graph = self._build_graph(work_dir, budget=budget)
         task = DISCOVERY_AGENT_TASK.format(
             goal=goal_text(spec),
             target_shape=target_shape(spec),
             channels=", ".join(c.value for c in spec.discovery.channels),
             constraints=self._constraints_text(spec),
         )
-        # One handler meters tokens/cost as each model call ends AND traces every
-        # tool call / model turn, so the run is observable live and its spend is
-        # captured even when the loop errors or hits the recursion cap.
-        tracer = _build_tracer(self.usage)
+        # One handler meters tokens/cost as each model call ends, traces every
+        # tool call / model turn, AND enforces the token budget — so the run is
+        # observable live and its spend is captured even when the loop errors,
+        # exhausts its budget, or hits the recursion cap.
+        tracer = _build_tracer(self.usage, budget=budget)
         logger.info(
-            "deep-agent starting: job=%s goal=%r channels=%s recursion_limit=%d",
+            "deep-agent starting: job=%s goal=%r channels=%s recursion_limit=%d budget=%s",
             job_id,
             _short(goal_text(spec), 80),
             ",".join(c.value for c in spec.discovery.channels),
             self.recursion_limit,
+            budget,
         )
-        try:
-            result = graph.invoke(
-                {"messages": [{"role": "user", "content": task}]},
-                config={"recursion_limit": self.recursion_limit, "callbacks": [tracer]},
-            )
-        except Exception:
-            # Surface the full traceback and the spend at the point of failure,
-            # then re-raise for FallbackDiscoveryAgent to degrade the run.
-            logger.exception(
-                "deep-agent FAILED after %d model turn(s), %d tool call(s), %d token(s)",
-                tracer.turns,
-                tracer.tool_calls,
-                self.usage.total.total_tokens if self.usage is not None else 0,
-            )
-            raise
+        report: DiscoveryReport | None = None
+        last_message: Any = None
+        attempts = 1 + EMPTY_COMPLETION_RETRIES
+        for attempt in range(1, attempts + 1):
+            try:
+                result = graph.invoke(
+                    {"messages": [{"role": "user", "content": task}]},
+                    config={"recursion_limit": self.recursion_limit, "callbacks": [tracer]},
+                )
+            except Exception:
+                # Surface the full traceback and the spend at the point of failure,
+                # then re-raise for FallbackDiscoveryAgent to degrade the run.
+                logger.exception(
+                    "deep-agent FAILED after %d model turn(s), %d tool call(s), %d token(s)",
+                    tracer.turns,
+                    tracer.tool_calls,
+                    self.usage.total.total_tokens if self.usage is not None else 0,
+                )
+                raise
 
-        report = result.get("structured_response") if isinstance(result, dict) else None
+            report = result.get("structured_response") if isinstance(result, dict) else None
+            if isinstance(report, DiscoveryReport):
+                break
+            messages = result.get("messages") if isinstance(result, dict) else []
+            last_message = messages[-1] if messages else None
+            if attempt < attempts and _assistant_said_nothing(last_message):
+                # An empty completion is a transient upstream fault, not an answer:
+                # rerun the research from scratch (the budget guard still bounds it).
+                logger.warning(
+                    "deep-agent turn produced an empty completion (no text, no tool "
+                    "calls); retrying the research (%d/%d)",
+                    attempt,
+                    EMPTY_COMPLETION_RETRIES,
+                )
+                continue
+            break
+
         spent = self.usage.total.total_tokens if self.usage is not None else 0
         if not isinstance(report, DiscoveryReport):
+            if _assistant_said_nothing(last_message):
+                # Empties on every attempt is the signature of a model whose
+                # upstream silently returns nothing for tool-bound requests
+                # (observed live: OpenRouter/Stealth serves tool calls as empty
+                # 200s) — say so, because the remedy is a different model.
+                reason = (
+                    "every research attempt returned an empty completion "
+                    "(no text, no tool calls, no usage) — the configured discovery "
+                    "model's provider appears not to support tool calling; "
+                    "configure a different discovery model"
+                )
+            else:
+                reason = _describe_final_turn(last_message)
             logger.error(
-                "deep-agent produced no structured report after %d turn(s), %d token(s)",
+                "deep-agent produced no structured report after %d turn(s), %d token(s): %s",
                 tracer.turns,
                 spent,
+                reason,
             )
-            raise DiscoveryAgentError("deep agent produced no structured DiscoveryReport")
+            raise DiscoveryAgentError(
+                f"deep agent produced no structured DiscoveryReport ({reason})"
+            )
         if not report.aspects:
             raise DiscoveryAgentError("deep agent report contained no aspects")
         logger.info(
@@ -364,7 +489,7 @@ class DeepAgentDiscoveryAgent:
         )
         return report
 
-    def _build_graph(self, work_dir: Path):
+    def _build_graph(self, work_dir: Path, *, budget: int | None = None):
         try:
             from deepagents import create_deep_agent
             from deepagents.backends import FilesystemBackend
@@ -380,8 +505,19 @@ class DeepAgentDiscoveryAgent:
 
             model = build_chat_model(model or DEFAULT_CHAT_MODEL)
 
+        def budget_status() -> str:
+            if self.usage is None:
+                return ""
+            used = self.usage.total.total_tokens
+            marker = " — WRAP UP NOW and emit your DiscoveryReport." if used >= 0.7 * budget else ""
+            return f"discovery token budget: {used}/{budget} used{marker}"
+
         tools = build_discovery_tools(
-            self.search, self.registry, work_dir, limit=self.config.max_candidates_per_aspect
+            self.search,
+            self.registry,
+            work_dir,
+            limit=self.config.max_candidates_per_aspect,
+            budget_status=budget_status if budget else None,
         )
         web_scout = {
             "name": "web-scout",

@@ -5,8 +5,6 @@ from __future__ import annotations
 import copy
 from pathlib import Path
 
-DUMMY_PATH = Path(".")
-
 from adh.contract import JobSpec, SourceChannel
 from adh.discovery import (
     ApprovalDecision,
@@ -24,6 +22,8 @@ from adh.search import (
     InMemorySearchProvider,
     SearchHit,
 )
+
+DUMMY_PATH = Path(".")
 
 
 # ----------------------------------------------------------------- helpers

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import copy
 import logging
-from pathlib import Path
 
 import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
@@ -181,6 +180,41 @@ def test_junk_final_output_raises_discovery_agent_error(minimal_spec_dict, tmp_p
         _agent(model).discover(_spec(minimal_spec_dict), tmp_path)
 
 
+def test_empty_completion_turn_is_retried_and_recovers(minimal_spec_dict, tmp_path):
+    """A well-formed-but-empty completion (no text, no tool calls) is transient.
+
+    Observed live: an OpenRouter upstream returned 200 with an entirely empty
+    AIMessage (no usage either). The research invocation must be retried instead
+    of killing deep discovery on the first hiccup.
+    """
+    model = ScriptedChatModel(
+        messages=iter(
+            [
+                AIMessage(content=""),  # the empty completion
+                _tool_call("web_search", {"query": "rust async"}, "t1"),
+                _tool_call("DiscoveryReport", _REPORT_ARGS, "t2", in_tokens=200, out_tokens=50),
+            ]
+        )
+    )
+    usage = UsageTracker()
+    plan = _agent(model, usage=usage).discover(_spec(minimal_spec_dict), tmp_path)
+
+    assert plan.aspects  # the retried invocation produced a real report
+    # metering folds BOTH invocations — the wasted empty turn still counts
+    assert usage.total.total_tokens == 360
+
+
+def test_persistent_empty_completions_raise_specific_error(minimal_spec_dict, tmp_path):
+    """Empty completions that survive the retries fail with an actionable reason."""
+    model = ScriptedChatModel(
+        messages=iter([AIMessage(content="") for _ in range(1 + 2)])  # initial + retries
+    )
+    with pytest.raises(DiscoveryAgentError) as excinfo:
+        _agent(model).discover(_spec(minimal_spec_dict), tmp_path)
+    assert "empty completion" in str(excinfo.value)
+    assert "tool calling" in str(excinfo.value)  # points at the remedy: another model
+
+
 def test_fixed_mode_skips_research_entirely(minimal_spec_dict, tmp_path):
     """Fixed mode wraps the user's seeds; the model is never invoked."""
     model = ScriptedChatModel(messages=iter([]))  # any call would StopIteration
@@ -249,6 +283,70 @@ def test_model_proposed_seeds_survive_with_empty_search_ports(minimal_spec_dict,
 
 
 # ----------------------------------------------------------- observability
+def test_budget_guard_stops_the_loop_before_more_spend(minimal_spec_dict, tmp_path):
+    """Once discovery spend reaches the token budget the NEXT model turn is
+    refused with DiscoveryBudgetExceeded (before the recursion limit matters)."""
+    from adh.discovery.deep_agent import DiscoveryBudgetExceeded
+
+    class LoopingModel(ScriptedChatModel):
+        def __init__(self):
+            def forever():
+                i = 0
+                while True:
+                    i += 1
+                    yield _tool_call("web_search", {"query": f"q{i}"}, f"t{i}")
+
+            super().__init__(messages=forever())
+
+    usage = UsageTracker()
+    agent = _agent(LoopingModel(), usage=usage, token_budget=200)  # each turn costs 110
+    with pytest.raises(DiscoveryBudgetExceeded):
+        agent.discover(_spec(minimal_spec_dict), tmp_path)
+    # spend is capped at roughly one turn past the budget, not 6 turns x 110
+    assert usage.total.total_tokens < 400
+
+
+def test_budget_derives_from_spec_limits(minimal_spec_dict, tmp_path):
+    """No explicit token_budget -> spec.limits.max_llm_tokens drives the guard."""
+    from adh.discovery.deep_agent import DiscoveryBudgetExceeded
+
+    class LoopingModel(ScriptedChatModel):
+        def __init__(self):
+            def forever():
+                i = 0
+                while True:
+                    i += 1
+                    yield _tool_call("web_search", {"query": f"q{i}"}, f"t{i}")
+
+            super().__init__(messages=forever())
+
+    usage = UsageTracker()
+    agent = _agent(LoopingModel(), usage=usage)  # no explicit budget
+    spec = _spec(minimal_spec_dict, limits={"max_llm_tokens": 150})
+    with pytest.raises(DiscoveryBudgetExceeded):
+        agent.discover(spec, tmp_path)
+
+
+def test_tool_results_carry_budget_status(tmp_path):
+    """Every tool result appends the running budget line so the model can wrap up."""
+    calls = {"n": 0}
+
+    def status() -> str:
+        calls["n"] += 1
+        return f"discovery token budget: {calls['n'] * 100}/1000 used"
+
+    tools = build_discovery_tools(
+        InMemorySearchProvider(
+            pages=[SearchHit(url="https://a.com", title="A", snippet="rust async")]
+        ),
+        InMemoryDatasetRegistry(),
+        tmp_path,
+        budget_status=status,
+    )
+    out = tools[0]("rust async")
+    assert "[budget] discovery token budget: 100/1000 used" in out
+
+
 def test_run_traces_steps_and_summarises_spend(minimal_spec_dict, caplog, tmp_path):
     """The loop logs every tool call, each model turn, and a finished summary."""
     model = ScriptedChatModel(
