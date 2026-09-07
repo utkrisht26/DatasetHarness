@@ -12,6 +12,7 @@ dependencies = [
     "pydantic>=2.7",
     "pyyaml>=6.0",
     "jsonschema>=4.20",
+    "langchain-openrouter>=0.2.8",
 ]
 
 [project.optional-dependencies]
@@ -19,8 +20,18 @@ dependencies = [
 # >=0.9: the run-config content-filter API moved behind the markdown generator.
 # rank_bm25 (already a Crawl4AI dep) backs the Bm25RelevanceJudge content scorer.
 web = ["crawl4ai>=0.9", "rank_bm25>=0.2"]
+# Live web meta-search for discovery (Tavily REST API). Without it the harness
+# falls back to in-memory stub search; TAVILY_API_KEY selects this adapter.
+search = ["tavily-python>=0.5"]
 # `datasets` channel — existing-dataset discovery + reuse (Phase 1.6)
 datasets = ["huggingface_hub>=0.36"]
+# MEDIA channel — live Pexels stock-video search + streaming download (video jobs).
+# Without it (or without PEXELS_API_KEY) video specs degrade to a loud coverage gap.
+media = ["httpx>=0.27"]
+# MEDIA channel — player-embedded video via yt-dlp. Extractors rot fast, so pin
+# a moving floor. The DEFAULT yt-dlp DRM refusal IS our Netflix boundary; the
+# bypass flags (allow_unplayable_formats / ignore_no_formats_error) are never set.
+webvideo = ["yt-dlp>=2025.01.01"]
 # deepagents research loop + MCP tool loading (Phase 1.0/1.2); `langchain` provides
 # init_chat_model for the provider-generic LlmRelevanceJudge AND Engine B's
 # LlmGenerator + LLM-as-jury panel (Phase 2.2/2.3).
@@ -39,15 +50,25 @@ verify = ["sympy>=1.12"]
 dedup = ["datasketch>=1.6"]
 # Engine B delivery (Phase 4.1) — Parquet shards. JSONL output needs no extra.
 deliver = ["pyarrow>=16"]
+# Engine B publishing (Phase 4.3) — push shards + docs to the HF Hub. The HubClient
+# port is injectable, so publish stays fully testable offline without this extra.
+publish = ["huggingface_hub>=0.24"]
+# Engine B dataset-quality evals (Phase 4.2) — embedding-space downstream-lift proxy.
+# Lazy import; the pure-math separation core runs without the extra.
+evals = ["sentence-transformers>=2.7"]
+# Engine B PII policy enforcement (Phase 2.4, ADR-0004) — Presidio-class NER behind
+# the PIIRedactor port. Fail-closed: an explicit pii_policy without this extra raises.
+pii = ["presidio-analyzer>=2.2", "presidio-anonymizer>=2.2"]
 # crawl microservice — HTTP surface over the web channel (Phase 1.1 service form)
 serve = ["adh[web]", "fastapi>=0.110", "uvicorn>=0.30", "httpx>=0.27"]
-all = ["adh[web,datasets,agents,verify,dedup,deliver,serve]"]
+all = ["adh[web,datasets,media,webvideo,agents,search,verify,dedup,deliver,serve,publish,evals,pii]"]
 
 [dependency-groups]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "ruff>=0.6",
+    "tavily-python>=0.5",  # exercises the Tavily search adapter offline
     "rank_bm25>=0.2",  # exercises Bm25RelevanceJudge offline
     "sympy>=1.12",     # exercises the real Tier-1 math verifier offline
     "datasketch>=1.6", # exercises the real MinHash/LSH near-dedup offline
