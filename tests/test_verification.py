@@ -120,7 +120,7 @@ def test_tier2_jury_drops_low_scoring(monkeypatch):
     class HarshJudge:
         model_id = "heuristic:harsh"
 
-        def evaluate(self, *, input, output, rubric, dimensions):
+        def evaluate(self, *, input, output, rubric, dimensions, reference=None):
             return PanelResult(scores={d: 1.0 for d in dimensions}, models=(self.model_id,))
 
     router = build_router(_spec(tier=2), judge=HarshJudge())
@@ -170,3 +170,25 @@ def test_tier3_failed_gate_skips_jury():
     assert verdict.kept is False
     assert verdict.stage == "verifier"  # rejected at the gate, jury never ran
     assert verdict.judge_scores is None
+
+
+def test_tier3_without_hook_degrades_to_jury():
+    """A hybrid spec whose schema carries no x-verifier (e.g. plain-text records like
+    b6b176e6's) skips the gate and grades with the jury — the gate is a cost
+    optimization for tier 3, not a requirement; rejecting everything stranded the run."""
+    router = VerificationRouter(spec=_spec(tier=3), verifier_hook=None, judge=HeuristicJudge())
+    verdict = router.verify(_cand(tier=3))
+    assert verdict.kept is True
+    assert verdict.stage == "jury"
+    assert verdict.verifier_result is None
+
+
+def test_tier3_without_hook_warns_once(caplog):
+    """The degradation is loud but not per-candidate noisy."""
+    import logging
+
+    router = VerificationRouter(spec=_spec(tier=3), verifier_hook=None, judge=HeuristicJudge())
+    with caplog.at_level(logging.WARNING, logger="adh.verification.router"):
+        router.verify(_cand(tier=3))
+        router.verify(_cand(tier=3))
+    assert len([r for r in caplog.records if "x-verifier" in r.message]) == 1

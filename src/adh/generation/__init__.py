@@ -8,6 +8,7 @@ from .generator import (
     LlmGenerator,
     build_generator,
 )
+from .media_packager import MediaPackager
 from .models import (
     DEFAULT_DIFFICULTIES,
     DEFAULT_PERSONAS,
@@ -15,15 +16,40 @@ from .models import (
     SeedPoint,
     make_candidate_id,
 )
-from .seed import CoverageReport, NoveltyGate, SeedEngine, coverage_report
+from .seed import (
+    DEFAULT_DIVERSITY_STRATEGY,
+    EVOLUTION_OPS,
+    DiversityStrategy,
+    EvolInstructStrategy,
+    NoveltyGate,
+    PersonaGridStrategy,
+    PersonaHubStrategy,
+    SeedEngine,
+    UnitContext,
+    CoverageReport,
+    coverage_report,
+    persona_grid,
+    resolve_strategy,
+)
 
 __all__ = [
     # models
     "SeedPoint",
     "Candidate",
     "make_candidate_id",
+    "MediaPackager",
     "DEFAULT_PERSONAS",
     "DEFAULT_DIFFICULTIES",
+    # diversity strategies (JobSpec.diversity_strategy)
+    "DEFAULT_DIVERSITY_STRATEGY",
+    "EVOLUTION_OPS",
+    "DiversityStrategy",
+    "EvolInstructStrategy",
+    "PersonaGridStrategy",
+    "PersonaHubStrategy",
+    "UnitContext",
+    "persona_grid",
+    "resolve_strategy",
     # seed engine
     "SeedEngine",
     "NoveltyGate",

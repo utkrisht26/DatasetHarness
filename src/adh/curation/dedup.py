@@ -53,6 +53,23 @@ class Deduper:
             return self._exact([self._norm(t) for t in texts])
         return self._minhash(texts)
 
+    def cluster_per_split(self, items: list[tuple[str, str]]) -> list[DedupAssignment]:
+        """Cluster ``(split, text)`` pairs independently within each split.
+
+        A duplicate never spans shards: identical text landing in two splits yields
+        two representatives (one per shard), so eval splits keep their own copies of
+        recurring content (RESEARCH §QC). Cluster ids carry a ``"<split>:"`` prefix;
+        input order is preserved in the output.
+        """
+        by_split: dict[str, list[int]] = {}
+        for i, (split, _text) in enumerate(items):
+            by_split.setdefault(split, []).append(i)
+        out: list[DedupAssignment | None] = [None] * len(items)
+        for split, idxs in by_split.items():
+            for i, assign in zip(idxs, self.cluster([items[i][1] for i in idxs])):
+                out[i] = DedupAssignment(f"{split}:{assign.cluster_id}", assign.is_duplicate)
+        return [a for a in out if a is not None]
+
     # ------------------------------------------------------------------ exact
     def _exact(self, normalized: list[str]) -> list[DedupAssignment]:
         seen: dict[str, str] = {}

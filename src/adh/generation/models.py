@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from adh.contract import SourceChannel, VerifiabilityTier
+from adh.contract import MediaRef, SourceChannel, VerifiabilityTier
 from adh.provenance import sha256_hex
 from adh.verifiers import VerifierRequest
 
@@ -49,6 +49,12 @@ class SeedPoint:
     source_license: str = "unknown"
     source_sha256: str | None = None
     derived_from: tuple[str, ...] = ()
+    # diversity-strategy metadata (OUTLINE §2.1, additive — downstream may ignore):
+    # ``evolution_op`` names the evol_instruct operator that produced this seed;
+    # ``directive`` is a strategy-specific instruction-shaping hint a Generator MAY
+    # fold into its prompt (empty for plain persona-grid seeds).
+    evolution_op: str = ""
+    directive: str = ""
 
 
 @dataclass(frozen=True)
@@ -86,10 +92,25 @@ class Candidate:
     language: str = "en"
     task_category: str | None = None
     cost_usd: float = 0.0
+    # media payload (modality extensions): ``media`` ships inside the record;
+    # ``staged_path`` is a local-only absolute path consumed by verification and
+    # delivery layouts — it is never serialized into shipped artifacts.
+    media: MediaRef | None = None
+    staged_path: str | None = None
 
     def to_verifier_request(self) -> VerifierRequest:
+        # Media candidates thread their staged clip through so deterministic
+        # probes (e.g. adh.verifiers.media:check_media) can re-hash/re-probe it.
+        extras: dict = {}
+        if self.media is not None:
+            extras["media"] = self.media.model_dump(mode="json")
+            extras["media_abs_path"] = self.staged_path
         return VerifierRequest(
-            input=self.input, output=self.output, reference=self.reference, tests=self.tests
+            input=self.input,
+            output=self.output,
+            reference=self.reference,
+            tests=self.tests,
+            extras=extras,
         )
 
     def to_dict(self) -> dict:
@@ -119,10 +140,13 @@ class Candidate:
             "language": self.language,
             "task_category": self.task_category,
             "cost_usd": self.cost_usd,
+            "media": self.media.model_dump(mode="json") if self.media is not None else None,
+            "staged_path": self.staged_path,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "Candidate":
+        # Tolerant defaults keep pre-media verified.jsonl resumes parseable.
         return cls(
             candidate_id=data["candidate_id"],
             job_id=data["job_id"],
@@ -148,6 +172,8 @@ class Candidate:
             language=data.get("language", "en"),
             task_category=data.get("task_category"),
             cost_usd=float(data.get("cost_usd", 0.0)),
+            media=MediaRef(**data["media"]) if data.get("media") else None,
+            staged_path=data.get("staged_path"),
         )
 
     def base_record_fields(self) -> dict:
@@ -172,6 +198,7 @@ class Candidate:
             "language": self.language,
             "task_category": self.task_category,
             "cost_usd": self.cost_usd,
+            "media": self.media,
         }
 
 

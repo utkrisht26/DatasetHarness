@@ -142,6 +142,190 @@ def test_build_generator_falls_back_without_models():
     assert isinstance(build_generator(_spec()), HeuristicGenerator)
 
 
+# ------------------------------------------------------- env-configured model ladder
+def _placeholder_llm_keys(monkeypatch):
+    """Fake credentials so provider integrations construct (no network until invoke)."""
+    for var in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.setenv(var, "test-placeholder-not-a-real-key")
+
+
+def test_build_generator_env_ladder_overrides_the_spec(monkeypatch):
+    """ADH_GENERATOR_MODELS is the deployment-level redirect, Engine-A parity."""
+    import adh.llm as llm
+    from adh.generation.routing import RoutedGenerator
+
+    monkeypatch.setenv(llm.models.GENERATOR_MODELS_ENV, "openai:gen-a, anthropic:gen-b")
+    _placeholder_llm_keys(monkeypatch)
+
+    gen = build_generator(_spec(generator_models=["openai:gpt-4o-mini"]))
+
+    assert isinstance(gen, RoutedGenerator)
+    assert gen.tiers[0]().model_id == "openai:gen-a"
+    assert gen.tiers[1]().model_id == "anthropic:gen-b"
+
+
+def test_build_generator_without_env_keeps_the_spec_ladder(monkeypatch):
+    import adh.llm as llm
+    from adh.generation.routing import RoutedGenerator
+
+    monkeypatch.delenv(llm.models.GENERATOR_MODELS_ENV, raising=False)
+    _placeholder_llm_keys(monkeypatch)
+
+    gen = build_generator(_spec(generator_models=["openai:gpt-4o-mini"]))
+
+    assert isinstance(gen, RoutedGenerator)
+    assert gen.tiers[0]().model_id == "openai:gpt-4o-mini"
+
+
+def test_build_generator_env_override_beats_empty_spec_too(monkeypatch):
+    """A deployment ladder applies even where a spec configures none (heuristic today)."""
+    import adh.llm as llm
+    from adh.generation.routing import RoutedGenerator
+
+    monkeypatch.setenv(llm.models.GENERATOR_MODELS_ENV, "openai:gen-a")
+    _placeholder_llm_keys(monkeypatch)
+
+    assert isinstance(build_generator(_spec()), RoutedGenerator)
+
+
+# ------------------------------------------------------- tier retry resilience
+def _one_seed():
+    return SeedEngine().plan("job", aspects=ASPECTS[:1], chunks=[_chunk("a1")], handoffs=[], n_seeds=1)[0]
+
+
+def test_routed_generator_retries_transient_tier_failures(monkeypatch):
+    """A provider blip retries within its tier instead of zeroing the build — the
+    b6b176e6 lesson: one bad upstream minute exhausted a single-tier ladder silently."""
+    import adh.generation.routing as routing
+
+    monkeypatch.setattr(routing, "_sleep", lambda *_: None)
+
+    class Flaky:
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, seed, *, spec, store=None):
+            self.calls += 1
+            if self.calls < 3:
+                raise RuntimeError("upstream 502")
+            return ["candidate"]
+
+    flaky = Flaky()
+    gen = routing.RoutedGenerator(tiers=(lambda: flaky,))
+    seed = _one_seed()
+
+    assert gen.generate(seed, spec=_spec()) == ["candidate"]
+    assert gen.exhausted == 0
+    assert flaky.calls == 3  # two faults absorbed + the successful attempt
+    assert gen.calls == {"tier0": 1}  # calls counts seeds dispatched, not attempts
+
+
+def test_routed_generator_escalates_after_retry_exhaustion(monkeypatch):
+    """Persistent tier failure still escalates upward — retries never mask a dead tier."""
+    import adh.generation.routing as routing
+
+    monkeypatch.setattr(routing, "_sleep", lambda *_: None)
+
+    class Boom:
+        def generate(self, seed, *, spec, store=None):
+            raise RuntimeError("down")
+
+    class Ok:
+        def generate(self, seed, *, spec, store=None):
+            return ["from-tier1"]
+
+    gen = routing.RoutedGenerator(tiers=(Boom, Ok))
+
+    assert gen.generate(_one_seed(), spec=_spec()) == ["from-tier1"]
+    assert gen.escalations == 1
+    assert gen.calls == {"tier0": 1, "tier1": 1}
+
+
+def test_routed_generator_does_not_replay_empty_tier_results():
+    """An empty-but-clean result is a quality verdict, not a fault — escalate at once."""
+    import adh.generation.routing as routing
+
+    class Empty:
+        def __init__(self):
+            self.calls = 0
+
+        def generate(self, seed, *, spec, store=None):
+            self.calls += 1
+            return []
+
+    empty = Empty()
+    gen = routing.RoutedGenerator(tiers=(lambda: empty,))
+
+    assert gen.generate(_one_seed(), spec=_spec()) == []
+    assert empty.calls == 1
+    assert gen.exhausted == 1
+
+
+# ------------------------------------------------------- unparseable-output re-ask
+class _ScriptedModel:
+    """Returns queued replies, recording each invoke's message list."""
+
+    def __init__(self, replies):
+        self.replies = list(replies)
+        self.calls = []
+
+    def invoke(self, messages, **params):
+        self.calls.append(list(messages))
+        return type("R", (), {"content": self.replies.pop(0)})()
+
+
+def _scripted_llm(replies):
+    from adh.generation.generator import LlmGenerator
+
+    gen = LlmGenerator.__new__(LlmGenerator)  # bypass __post_init__ (no provider build)
+    gen.model_id = "openai:test"
+    gen.usage = None
+    gen.max_grounding_chars = 4000
+    gen._model = _ScriptedModel(replies)
+    return gen
+
+
+def test_llm_generator_reasks_once_after_prose_reply():
+    """A prose reply gets exactly one corrective re-ask instead of wasting the call."""
+    import json
+
+    good = json.dumps({"input": "What is i2v?", "output": "Image-to-video generation."})
+    gen = _scripted_llm(["Sure! This record is about dancing models.", good])
+
+    cands = gen.generate(_one_seed(), spec=_spec(tier=2))
+
+    assert len(cands) == 1
+    assert cands[0].input == "What is i2v?"
+    assert len(gen._model.calls) == 2
+    # the corrective turn replays the prior reply and demands JSON only
+    assert len(gen._model.calls[1]) == 4
+    assert "not valid JSON" in gen._model.calls[1][-1].content
+
+
+def test_llm_generator_gives_up_after_one_reask(caplog):
+    import logging
+
+    gen = _scripted_llm(["still no json here", "nope"])
+
+    with caplog.at_level(logging.WARNING, logger="adh.generation.generator"):
+        assert gen.generate(_one_seed(), spec=_spec(tier=2)) == []
+    assert len(gen._model.calls) == 2
+    # the surrender names the seed AND shows what the model actually said
+    heads = [r for r in caplog.records if "unparseable" in r.message]
+    assert heads and "still no json here" in heads[-1].getMessage()
+
+
+def test_llm_generator_clean_json_needs_no_reask():
+    import json
+
+    gen = _scripted_llm([json.dumps({"input": "Q?", "output": "A."})])
+
+    cands = gen.generate(_one_seed(), spec=_spec(tier=2))
+
+    assert len(cands) == 1
+    assert len(gen._model.calls) == 1
+
+
 # --------------------------------------------------------------------- coverage
 def test_coverage_report_flags_thin_aspects():
     report = coverage_report(["a1", "a1", "a1"], ASPECTS, target_records=8)
@@ -149,3 +333,83 @@ def test_coverage_report_flags_thin_aspects():
     assert report.per_aspect["a2"] == 0
     assert "a2" in report.thin_aspects
     assert "a1" not in report.thin_aspects
+
+
+# ------------------------------------------------------- candidate media threading
+def _media_ref():
+    from adh.contract import MediaRef
+
+    return MediaRef(
+        path="media/" + "a" * 64 + ".mp4",
+        sha256="a" * 64,
+        bytes=2048,
+        duration_s=6.0,
+        width=1080,
+        height=1920,
+        format="mp4",
+        attribution="Pexels: A Videographer",
+    )
+
+
+def _video_candidate(**over):
+    from adh.generation.models import make_candidate_id
+
+    base = dict(
+        candidate_id=make_candidate_id("job", "a1", "scene", "caption"),
+        job_id="job",
+        aspect_id="a1",
+        verifiability_tier=VerifiabilityTier.HYBRID,
+        input="a couple dancing outdoors",
+        output="A couple dances outdoors at golden hour.",
+        media=_media_ref(),
+        staged_path="/runs/j/media_staging/job/" + "a" * 64 + ".mp4",
+        model_id="packager:adh",
+        pipeline_step="media-packaging",
+    )
+    base.update(over)
+    from adh.generation.models import Candidate
+
+    return Candidate(**base)
+
+
+def test_candidate_threads_media_into_verifier_request_extras():
+    req = _video_candidate().to_verifier_request()
+
+    assert req.extras["media_abs_path"] == _video_candidate().staged_path
+    assert req.extras["media"]["sha256"] == "a" * 64
+    assert req.extras["media"]["duration_s"] == 6.0
+
+
+def test_text_candidate_keeps_empty_verifier_extras():
+    seeds = SeedEngine().plan("job", aspects=ASPECTS[:1], chunks=[_chunk("a1")], handoffs=[], n_seeds=1)
+    cand = HeuristicGenerator().generate(seeds[0], spec=_spec())[0]
+
+    assert cand.to_verifier_request().extras == {}
+
+
+def test_candidate_media_round_trips_through_dicts():
+    cand = _video_candidate()
+
+    restored = type(cand).from_dict(cand.to_dict())
+
+    assert restored.media == cand.media
+    assert restored.staged_path == cand.staged_path
+
+
+def test_legacy_candidate_dicts_without_media_still_parse():
+    from adh.generation.models import Candidate
+
+    legacy = _video_candidate().to_dict()
+    del legacy["media"]
+    del legacy["staged_path"]
+
+    restored = Candidate.from_dict(legacy)
+
+    assert restored.media is None
+    assert restored.staged_path is None
+
+
+def test_base_record_fields_carry_media():
+    assert _video_candidate().base_record_fields()["media"] == _media_ref()
+    text_candidate = HeuristicGenerator().generate(_one_seed(), spec=_spec())[0]
+    assert text_candidate.base_record_fields()["media"] is None

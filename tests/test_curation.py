@@ -61,6 +61,55 @@ def test_dedupe_helper_warns_on_global_scope(caplog):
     assert any("global" in r.message for r in caplog.records)
 
 
+# --------------------------------------------------------------------- split-aware dedup
+def test_cluster_per_split_joins_near_dups_within_a_split_only():
+    a = "the quick brown fox jumps over the lazy dog in the meadow every morning"
+    near = "the quick brown fox jumps over the lazy dog in the meadow each morning"
+    d = Deduper(method="minhash", ngram=5, jaccard=0.6)
+    out = d.cluster_per_split([("train", a), ("train", near), ("test", a)])
+
+    assert out[0].cluster_id == out[1].cluster_id  # near-dup pair clustered within train
+    assert out[0].is_duplicate is False and out[1].is_duplicate is True
+    # identical text in another split is that shard's own representative — never joined
+    assert out[2].is_duplicate is False
+    assert out[2].cluster_id != out[0].cluster_id
+    assert out[0].cluster_id.startswith("train:") and out[2].cluster_id.startswith("test:")
+
+
+def test_cluster_per_split_never_spans_splits_and_counts_line_up():
+    texts = [
+        "alpha one two three",
+        "alpha one two three",  # dup pair -> different splits below on purpose
+        "beta four five six",
+        "beta four five six",
+        "gamma seven eight nine",
+        "delta ten eleven twelve",
+    ]
+    splits = ["train", "validation", "train", "validation", "test", "train"]
+    items = list(zip(splits, texts))
+    d = Deduper(method="exact")
+    out = d.cluster_per_split(items)
+
+    assert len(out) == len(items)
+    owner: dict[str, str] = {}
+    for (split, _text), assign in zip(items, out):
+        assert owner.setdefault(assign.cluster_id, split) == split  # no cluster spans splits
+        assert assign.cluster_id.startswith(f"{split}:")
+    # counts consistent with clustering each split independently
+    expected_dups = sum(
+        sum(1 for x in Deduper(method="exact").cluster([t for s, t in items if s == sp]) if x.is_duplicate)
+        for sp in set(splits)
+    )
+    assert sum(1 for a in out if a.is_duplicate) == expected_dups
+
+
+def test_deduper_public_api_backward_compatible():
+    out = Deduper(method="exact").cluster(["same text", "same text"])
+    assert out[0].is_duplicate is False and out[1].is_duplicate is True
+    assert out[0].cluster_id == out[1].cluster_id
+    assert out[0].cluster_id.startswith("clu-")  # plain cluster() ids carry no split prefix
+
+
 # --------------------------------------------------------------------- decontam
 def test_decontaminator_flags_overlap(tmp_path):
     held = tmp_path / "heldout.jsonl"
@@ -144,7 +193,7 @@ def test_build_record_rejects_contract_violation_via_dead_letter():
     assert row["candidate_id"] == "job:a1:abcdef123456" and row["error"]
 
 
-def _spec(tier=2):
+def _spec(tier=2, **over):
     from adh.contract import JobSpec
 
     base = dict(
@@ -165,4 +214,45 @@ def _spec(tier=2):
     )
     if tier in (2, 3):
         base["judge_config"] = {"models": ["anthropic:x", "openai:y"], "min_score": 3.5}
+    base.update(over)
     return JobSpec(**base)
+
+
+# --------------------------------------------------------------------- split-aware curation
+def _id_in_split(prefix: str, split: str, splits: dict) -> str:
+    """A record id whose deterministic split assignment lands in ``split``."""
+    i = 0
+    while assign_split(f"{prefix}-{i}", splits, contaminated=False) != split:
+        i += 1
+    return f"{prefix}-{i}"
+
+
+def test_curate_clusters_within_splits_end_to_end():
+    from adh.orchestration.engine_b import _curate
+
+    a = "the quick brown fox jumps over the lazy dog in the meadow every morning"
+    near = "the quick brown fox jumps over the lazy dog in the meadow each morning"
+    splits = {"train": 0.9, "validation": 0.05, "test": 0.05}
+    # same threshold the sibling Deduper tests use: this pair's jaccard sits
+    # between 0.6 and the 0.8 contract default (a mid-text swap breaks 5 of 9
+    # five-gram shingles)
+    spec = _spec(pii_policy="allow", dedup_policy={"scope": "per-shard", "method": "minhash", "ngram": 5, "jaccard": 0.6})
+    verdict = Verdict(True, "jury", judge_scores={"overall": 4.0}, judge_models=("m1", "m2"))
+    kept = [
+        (_candidate(candidate_id=_id_in_split("t", "train", splits), output=a), verdict),
+        (_candidate(candidate_id=_id_in_split("n", "train", splits), output=near), verdict),
+        (_candidate(candidate_id=_id_in_split("x", "test", splits), output=a), verdict),
+    ]
+
+    records, _aspects, dead, dups, pii = _curate(
+        kept, spec=spec, schema=None, schema_base_dir=None
+    )
+
+    assert dead == [] and pii == {"pii_dropped": 0, "pii_redacted": 0}
+    assert dups == 1  # the train near-dup; the identical test copy is its shard's representative
+    by_split = {r.split: r for r in records}
+    assert set(by_split) == {"train", "test"}
+    for rec in records:
+        assert rec.dedup_cluster_id.startswith(f"{rec.split}:")  # cluster lives inside its shard
+        assert rec.is_duplicate is False
+    assert by_split["train"].dedup_cluster_id != by_split["test"].dedup_cluster_id

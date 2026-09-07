@@ -13,13 +13,8 @@ def test_default_model_is_a_provider_qualified_id():
     assert ":" in DEFAULT_CHAT_MODEL  # "<provider>:<model>" form for init_chat_model
 
 
-def test_build_chat_model_returns_an_invokable_model():
-    # Construction must not require an API key (no network until .invoke()).
-    model = build_chat_model("anthropic:claude-haiku-4-5")
-    assert hasattr(model, "invoke")
-
-
-def test_build_chat_model_passes_config_through(monkeypatch):
+def _fake_init(monkeypatch):
+    """Patch langchain's init_chat_model and return the kwargs-seen dict."""
     seen = {}
 
     def fake_init(model_id, **kw):
@@ -30,13 +25,80 @@ def test_build_chat_model_passes_config_through(monkeypatch):
     import langchain.chat_models as lcm
 
     monkeypatch.setattr(lcm, "init_chat_model", fake_init)
+    return seen
+
+
+def test_build_chat_model_returns_an_invokable_model():
+    # Construction must not require an API key (no network until .invoke()).
+    model = build_chat_model("anthropic:claude-haiku-4-5")
+    assert hasattr(model, "invoke")
+
+
+def test_build_chat_model_injects_nothing_without_configuration(monkeypatch):
+    # With no ADH_LLM_* configuration the factory is pure passthrough: several
+    # OpenAI-compatible gateways exist, and which one serves traffic must come
+    # from configuration, never be hard-wired in code.
+    monkeypatch.delenv(adh.llm.models.BASE_URL_ENV, raising=False)
+    monkeypatch.delenv(adh.llm.models.API_KEY_ENV, raising=False)
+    seen = _fake_init(monkeypatch)
+
     build_chat_model("openai:gpt-4o-mini", temperature=0, max_tokens=16)
     assert seen["model_id"] == "openai:gpt-4o-mini"
     assert seen["kw"] == {"temperature": 0, "max_tokens": 16}
 
 
+def test_build_chat_model_routes_through_env_base_url(monkeypatch):
+    monkeypatch.setenv(adh.llm.models.BASE_URL_ENV, "https://api.together.xyz/v1")
+    monkeypatch.delenv(adh.llm.models.API_KEY_ENV, raising=False)
+    seen = _fake_init(monkeypatch)
+
+    build_chat_model("openai:gpt-4o-mini", temperature=0)
+    assert seen["kw"]["base_url"] == "https://api.together.xyz/v1"
+    assert seen["kw"]["temperature"] == 0
+
+
+def test_env_base_url_pairs_with_env_api_key(monkeypatch):
+    monkeypatch.setenv(adh.llm.models.BASE_URL_ENV, "https://api.together.xyz/v1")
+    monkeypatch.setenv(adh.llm.models.API_KEY_ENV, "test-key")
+    seen = _fake_init(monkeypatch)
+
+    build_chat_model("openai:gpt-4o-mini")
+    assert seen["kw"]["base_url"] == "https://api.together.xyz/v1"
+    assert seen["kw"]["api_key"] == "test-key"
+
+
+def test_explicit_base_url_beats_env_and_stays_unpaired(monkeypatch):
+    monkeypatch.setenv(adh.llm.models.BASE_URL_ENV, "https://api.together.xyz/v1")
+    monkeypatch.setenv(adh.llm.models.API_KEY_ENV, "test-key")
+    seen = _fake_init(monkeypatch)
+
+    build_chat_model("openai:gpt-4o-mini", base_url="http://localhost:11434/v1")
+    assert seen["kw"]["base_url"] == "http://localhost:11434/v1"
+    assert "api_key" not in seen["kw"]  # endpoint-specific credentials stay the caller's job
+
+
 def test_build_chat_model_is_exported_from_package():
     assert adh.llm.build_chat_model is build_chat_model
+
+
+# --------------------------------------------------------------------- model-list env
+def test_engine_b_model_list_env_names_are_stable():
+    # Documented configuration surface (see adh.llm.models docstring) — renames
+    # would silently break deployments, so pin them.
+    assert adh.llm.models.GENERATOR_MODELS_ENV == "ADH_GENERATOR_MODELS"
+    assert adh.llm.models.JUDGE_MODELS_ENV == "ADH_JUDGE_MODELS"
+
+
+def test_env_model_list_parses_comma_separated_ids(monkeypatch):
+    monkeypatch.setenv("ADH_TEST_MODELS", " openai:a , anthropic:b ,,")
+    assert adh.llm.models.env_model_list("ADH_TEST_MODELS") == ["openai:a", "anthropic:b"]
+    assert adh.llm.models.env_model_list("ADH_TEST_MISSING") == []
+    monkeypatch.setenv("ADH_TEST_EMPTY", "  ,  ")
+    assert adh.llm.models.env_model_list("ADH_TEST_EMPTY") == []
+
+
+def test_env_model_list_is_exported_from_package():
+    assert adh.llm.env_model_list is adh.llm.models.env_model_list
 
 
 # --------------------------------------------------------------------- token usage

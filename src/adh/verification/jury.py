@@ -3,12 +3,15 @@
 Soft-verifiable quality has no deterministic oracle, so it is graded by a jury with
 the bias mitigations the contract mandates: a **panel of disjoint model families**
 (PoLL — cheaper *and* less biased than one big judge), **length-controlled** rubric
-scoring (judges are told not to reward verbosity), and reference-guided scoring where
-a gold exists. The panel returns per-dimension scores; the router thresholds their
-mean against ``judge_config.min_score``.
+scoring (judges are told not to reward verbosity), **position-swap** scoring (every
+item is graded in both presentation orders and averaged — RESEARCH.md measures GPT-4
+at ~65% order-consistency), and reference-guided scoring where a gold exists. The
+panel returns per-dimension scores; the router thresholds their mean against
+``judge_config.min_score``.
 
-Two implementations, same seam as everywhere else: :class:`HeuristicJudge` scores
-deterministically offline; :class:`LlmJuryPanel` runs the real models and meters them.
+Implementations, same seam as everywhere else: :class:`HeuristicJudge` scores
+deterministically offline; :class:`LlmJuryPanel` runs the real models and meters
+them; :class:`SwapConsistencyPanel` wraps any panel to cancel position bias.
 """
 
 from __future__ import annotations
@@ -46,9 +49,20 @@ class PanelResult:
 @runtime_checkable
 class JudgePanel(Protocol):
     def evaluate(
-        self, *, input: str, output: str, rubric: str, dimensions: tuple[str, ...]
+        self,
+        *,
+        input: str,
+        output: str,
+        rubric: str,
+        dimensions: tuple[str, ...],
+        reference: str | None = None,
     ) -> PanelResult:
-        """Score one input/output pair across ``dimensions`` on a 0–5 scale."""
+        """Score one input/output pair across ``dimensions`` on a 0–5 scale.
+
+        ``reference`` is the gold answer when the candidate carries one — judges are
+        expected to grade correctness against it rather than vibes; ``None`` (the
+        default) keeps reference-free calls protocol-compatible.
+        """
         ...
 
 
@@ -60,8 +74,20 @@ class HeuristicJudge:
     model_id: str = "heuristic:judge"
 
     def evaluate(
-        self, *, input: str, output: str, rubric: str, dimensions: tuple[str, ...]
+        self,
+        *,
+        input: str,
+        output: str,
+        rubric: str,
+        dimensions: tuple[str, ...],
+        reference: str | None = None,
     ) -> PanelResult:
+        """Deterministically score the output; ``reference`` is accepted but unused.
+
+        The heuristic scorer is slot- and reference-agnostic by design — no position
+        bias to swap away and no ground truth to consult — so accepting the kwarg is
+        pure protocol compatibility and the scoring behavior never changes.
+        """
         in_words = set(_WORD_RE.findall(input.lower()))
         out_words = _WORD_RE.findall(output.lower())
         out_set = set(out_words)
@@ -105,11 +131,17 @@ class LlmJuryPanel:
             self._judges[model_id] = build_chat_model(model_id, temperature=0.0)
 
     def evaluate(
-        self, *, input: str, output: str, rubric: str, dimensions: tuple[str, ...]
+        self,
+        *,
+        input: str,
+        output: str,
+        rubric: str,
+        dimensions: tuple[str, ...],
+        reference: str | None = None,
     ) -> PanelResult:
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        prompt = _judge_prompt(input, output, rubric, dimensions)
+        prompt = _judge_prompt(input, output, rubric, dimensions, reference=reference)
         per_dim: dict[str, list[float]] = {d: [] for d in dimensions}
         used: list[str] = []
         for model_id, model in self._judges.items():
@@ -134,12 +166,72 @@ class LlmJuryPanel:
         return PanelResult(scores=mean, models=tuple(used))
 
 
-def _judge_prompt(input: str, output: str, rubric: str, dimensions: tuple[str, ...]) -> str:
+def _judge_prompt(
+    input: str,
+    output: str,
+    rubric: str,
+    dimensions: tuple[str, ...],
+    reference: str | None = None,
+) -> str:
     keys = ", ".join(f'"{d}": <0-5>' for d in dimensions)
+    reference_block = (
+        f"\n\nREFERENCE (gold answer — grade the RESPONSE's correctness against it):\n{reference}"
+        if reference
+        else ""
+    )
     return (
-        f"INPUT:\n{input}\n\nRESPONSE:\n{output}\n\n"
+        f"INPUT:\n{input}\n\nRESPONSE:\n{output}{reference_block}\n\n"
         f"Score the RESPONSE. Return ONLY a JSON object: {{{keys}}}."
     )
+
+
+# ------------------------------------------------------------------ position-swap
+@dataclass(frozen=True)
+class SwapConsistencyPanel:
+    """Position-bias mitigation (PHASE0-CONTRACT §0.2 "position-swapped pairwise").
+
+    Wraps any :class:`JudgePanel` and scores every item twice — once with the
+    input/response pair presented in canonical order and once with the presentation
+    order swapped — then returns the per-dimension mean. Averaging cancels a judge's
+    systematic preference for whichever text occupies a given prompt slot; a judge
+    that flatters one order and pans the other lands on the same middle score either
+    way. A pass that abstains (empty ``models``) contributes nothing to the average;
+    if both abstain the wrapper abstains too. The deterministic :class:`HeuristicJudge`
+    has no slot preference, so ``build_judge`` never wraps it.
+    """
+
+    inner: JudgePanel
+
+    def evaluate(
+        self,
+        *,
+        input: str,
+        output: str,
+        rubric: str,
+        dimensions: tuple[str, ...],
+        reference: str | None = None,
+    ) -> PanelResult:
+        passes = [
+            self.inner.evaluate(
+                input=input, output=output, rubric=rubric, dimensions=dimensions, reference=reference
+            ),
+            self.inner.evaluate(
+                input=output, output=input, rubric=rubric, dimensions=dimensions, reference=reference
+            ),
+        ]
+        models: list[str] = []
+        for p in passes:
+            for m in p.models:
+                if m not in models:
+                    models.append(m)
+        scored = [p for p in passes if p.models]
+        if not scored:
+            return PanelResult(scores={d: 0.0 for d in dimensions}, models=())
+        mean = {
+            d: round(sum(p.scores.get(d, 0.0) for p in scored) / len(scored), 3)
+            for d in dimensions
+        }
+        return PanelResult(scores=mean, models=tuple(models))
 
 
 def _text(response) -> str:
@@ -169,13 +261,52 @@ def _parse_scores(text: str, dimensions: tuple[str, ...]) -> dict[str, float] | 
 
 
 def build_judge(spec, *, usage: UsageTracker | None = None) -> JudgePanel:
-    """Live PoLL panel when judge models are configured + importable; else heuristic."""
+    """Live PoLL panel when judge models are configured + importable; else heuristic.
+
+    Model selection is configuration, not code (Engine-A parity): the
+    ``ADH_JUDGE_MODELS`` deployment override wins when set, else the spec's
+    ``judge_config.models`` panel applies. Honors ``judge_config.position_swap``
+    (default True): the live panel is wrapped in :class:`SwapConsistencyPanel` so
+    every item is scored in both presentation orders. The deterministic heuristic
+    path is returned unwrapped — it has no presentation-order bias to mitigate.
+    """
     cfg = getattr(spec, "judge_config", None)
-    models = tuple(cfg.models) if cfg and cfg.models else ()
+    models = _configured_judge_models(cfg)
+    swap = bool(getattr(cfg, "position_swap", False)) if cfg is not None else False
+    panel: JudgePanel
     if not models:
-        return HeuristicJudge()
-    try:
-        return LlmJuryPanel(models=models, usage=usage)
-    except Exception as exc:  # noqa: BLE001 - no extra / no key -> deterministic fallback
-        logger.warning("LlmJuryPanel unavailable (%s); using HeuristicJudge", exc)
-        return HeuristicJudge()
+        panel = HeuristicJudge()
+    else:
+        try:
+            panel = LlmJuryPanel(models=models, usage=usage)
+        except Exception as exc:  # noqa: BLE001 - no extra / no key -> deterministic fallback
+            logger.warning("LlmJuryPanel unavailable (%s); using HeuristicJudge", exc)
+            panel = HeuristicJudge()
+    if swap and isinstance(panel, LlmJuryPanel):
+        return SwapConsistencyPanel(panel)
+    return panel
+
+
+def _configured_judge_models(cfg) -> tuple[str, ...]:
+    """Deployment panel (``ADH_JUDGE_MODELS``) first, else the spec's own."""
+    from adh.contract.families import distinct_families
+    from adh.llm import JUDGE_MODELS_ENV, env_model_list
+
+    env_ids = env_model_list(JUDGE_MODELS_ENV)
+    if not env_ids:
+        return tuple(cfg.models) if cfg and cfg.models else ()
+    families = distinct_families(env_ids)
+    if len(families) < 2:
+        logger.warning(
+            "%s override lists <2 distinct model families (%s) — the PoLL "
+            "disjoint-family guarantee is weakened for this deployment",
+            JUDGE_MODELS_ENV,
+            sorted(families),
+        )
+    logger.warning(
+        "judge panel overridden by %s=%s (spec configured %s)",
+        JUDGE_MODELS_ENV,
+        ",".join(env_ids),
+        list(cfg.models) if cfg and cfg.models else [],
+    )
+    return tuple(env_ids)

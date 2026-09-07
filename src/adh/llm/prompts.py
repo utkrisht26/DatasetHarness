@@ -55,7 +55,10 @@ DISCOVERY_AGENT_SYSTEM = (
     "Assess every candidate you keep: shape_match (0-1: does it contain records of\n"
     "the target shape?), quality (0-1: signal vs noise), est_yield (usable records\n"
     "it could plausibly produce). Prefer few good sources over many weak ones; note\n"
-    "license and publication date whenever the search results expose them. When your\n"
+    "license and publication date whenever the search results expose them. Budget\n"
+    "discipline: every tool result ends with a '[budget]' line showing tokens used;\n"
+    "once you have enough candidates per aspect, stop researching and emit your\n"
+    "report — if a budget line says to wrap up, do so immediately. When your\n"
     "research is done, emit the final structured discovery report."
 )
 

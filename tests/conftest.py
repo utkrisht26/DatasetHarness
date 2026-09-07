@@ -4,11 +4,30 @@ from __future__ import annotations
 
 import copy
 import logging
+import os
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def _isolate_process_environ():
+    """Snapshot ``os.environ`` per test and restore it afterwards.
+
+    The in-process CLI tests call ``main()``, whose ``load_dotenv()`` injects the
+    repo's real deployment config (model ladders, judge panels, provider keys)
+    into the live process environment. Without this guard, any test running after
+    a CLI test silently inherits that config — e.g. the no-override heuristic
+    fallbacks in build_generator/build_judge become unreachable.
+    """
+    snapshot = os.environ.copy()
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(snapshot)
 
 
 @pytest.fixture(autouse=True)
