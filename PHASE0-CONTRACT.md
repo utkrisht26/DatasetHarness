@@ -99,7 +99,7 @@ discovery:
   mode:           "auto"            # auto (default) | seeded | fixed
   seeds:          []                # OPTIONAL starting points — e.g. ["https://docs.rs/"] — never required
   approval_gate:  true              # pause to review ranked sources before fetch (set false to run autonomous)
-  channels:       ["datasets", "web", "synthesis"]   # tried in this order: reuse > crawl > synthesize
+  channels:       ["datasets", "web", "synthesis"]   # tried in this order: reuse > crawl > synthesize; add "media" for stock-video jobs
   constraints:                      # OPTIONAL guardrails — NOT a list of where to look
     include_domains: []
     exclude_domains: ["reddit.com"]
@@ -155,6 +155,7 @@ class DiscoveryMode(str, Enum):
 class SourceChannel(str, Enum):
     DATASETS = "datasets"              # HF Hub / Kaggle / data.gov — reuse, don't re-scrape
     WEB = "web"                        # Crawl4AI crawl
+    MEDIA = "media"                    # licensed stock-video download (Pexels et al.) — added post-Phase-0
     SYNTHESIS = "synthesis"            # generate from model knowledge, no external source
 
 class DiscoveryConstraints(BaseModel):
@@ -162,6 +163,9 @@ class DiscoveryConstraints(BaseModel):
     exclude_domains: list[str] = []
     recency_after: str | None = None
     respect_robots_txt: bool = True
+    media_min_duration_s: float | None = None   # media-channel acquisition filters
+    media_max_duration_s: float | None = None
+    media_orientation: str | None = None        # landscape | portrait | square
 
 class Discovery(BaseModel):
     mode: DiscoveryMode = DiscoveryMode.AUTO
@@ -308,8 +312,9 @@ class Record(BaseModel):
 
     input: str
     output: str
+    media: MediaRef | None = None     # acquired-asset ref (video jobs); None for text/code
 
-    source_channel: SourceChannel = SourceChannel.WEB   # datasets | web | synthesis
+    source_channel: SourceChannel = SourceChannel.WEB   # datasets | web | media | synthesis
     source_url: HttpUrl | None = None                   # null for synthesis
     source_license: str = "unknown"
     source_sha256: str | None = None
@@ -340,6 +345,36 @@ class Record(BaseModel):
 > **Design note — large/sensitive prompts.** Store `prompt_hash` inline; keep the raw prompt in a
 > side-store keyed by hash (mirrors Distilabel's toggleable `add_raw_input`). Keeps records small,
 > avoids leaking secrets into the dataset, and still gives full reproducibility.
+
+### 0.4.3 Media extension (post-Phase-0 amendment)
+
+Training-ready media datasets (image-to-video fine-tuning et al.) extend the canonical record:
+
+```python
+class MediaRef(BaseModel):          # Record.media; None for text/code jobs
+    role: str = "video"
+    path: str                       # dataset-dir-relative, content-addressed: media/<sha256>.<ext>
+    sha256: str
+    bytes: int
+    duration_s: float | None = None
+    width: int | None = None
+    height: int | None = None
+    fps: float | None = None
+    format: str = "mp4"
+    attribution: str | None = None
+```
+
+* **Channel**: `SourceChannel.MEDIA` acquires licensed stock clips (Pexels first) into a
+  content-addressed staging tree (`media_staging/<job_id>/<sha256>.<ext>`) under
+  `limits.max_storage_mb`; unknown-license clips are quarantined like any other source.
+* **Verification**: the video-caption record schema declares an `x-verifier` media-probe hook
+  (re-hash + re-probe of the staged file); captions are graded by the jury as usual.
+* **Delivery**: `JobSpec.delivery_layout` selects a registered trainer-facing bundle builder from
+  `adh.delivery.layouts` (`"hf"` default, `"ltx"` for LTX-Video-style trainers; extensible via
+  `register_layout`). Asset files are appended to the delivery manifest as `kind:"asset"` rows so
+  publish/croissant carry them automatically.
+* Captions v1 come from source metadata; vision-model frame captioning and conditioning-frame
+  extraction are designed-in TODO seams, not contract changes.
 
 ---
 

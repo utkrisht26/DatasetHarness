@@ -35,8 +35,26 @@ class DiscoveryMode(str, Enum):
 
 
 class SourceChannel(str, Enum):
-    """The three Phase 0 acquisition channels, tried reuse > crawl > synthesize."""
+    """Acquisition channels, tried reuse > crawl > acquire > synthesize.
+
+    Phase 0 shipped three members; ``MEDIA`` (licensed stock-video acquisition
+    for ``modality="video"`` jobs) was added per the PHASE0-CONTRACT.md §0.3.2
+    amendment.
+    """
 
     DATASETS = "datasets"  # HF Hub / Kaggle / data.gov — reuse, don't re-scrape
     WEB = "web"  # Crawl4AI crawl
+    MEDIA = "media"  # licensed media download (Pexels / Openverse / open web et al.)
     SYNTHESIS = "synthesis"  # generate from model knowledge, no external source
+
+
+# Modalities whose jobs acquire real media assets through the MEDIA channel.
+# Contract-level vocabulary (PHASE0-CONTRACT.md §0.3.2 media amendment): routing,
+# Engine B gating, and the channel itself all branch on this shared definition
+# rather than re-hardcoding ``== "video"`` per site.
+MEDIA_MODALITIES: frozenset[str] = frozenset({"video", "image"})
+
+
+def is_media_modality(modality: str) -> bool:
+    """True when ``modality`` acquires real assets through the MEDIA channel."""
+    return (modality or "").strip().lower() in MEDIA_MODALITIES

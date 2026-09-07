@@ -59,6 +59,23 @@
     "output_tokens": { "type": "integer", "minimum": 0 },
     "language": { "type": "string" },
     "task_category": { "type": ["string", "null"] },
-    "cost_usd": { "type": "number", "minimum": 0 }
+    "cost_usd": { "type": "number", "minimum": 0 },
+    "media": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["role", "path", "sha256", "bytes", "format"],
+      "properties": {
+        "role": { "type": "string" },
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "duration_s": { "type": ["number", "null"], "minimum": 0 },
+        "width": { "type": ["integer", "null"], "minimum": 1 },
+        "height": { "type": ["integer", "null"], "minimum": 1 },
+        "fps": { "type": ["number", "null"] },
+        "format": { "type": "string" },
+        "attribution": { "type": ["string", "null"] }
+      }
+    }
   }
 }

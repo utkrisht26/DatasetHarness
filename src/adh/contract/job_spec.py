@@ -9,6 +9,7 @@ time (fail-fast). Invariants that need filesystem/schema access (e.g. the Tier-1
 from __future__ import annotations
 
 import warnings
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -31,6 +32,37 @@ class DiscoveryConstraints(BaseModel):
     recency_after: str | None = None
     respect_robots_txt: bool = True
 
+    # --- media acquisition filters (media modalities: video/image); the
+    # authoritative integrity bounds live in the record schema's x-verifier hook ---
+    media_min_duration_s: float | None = None
+    media_max_duration_s: float | None = None
+    media_orientation: str | None = None  # landscape | portrait | square
+    # Requested asset types ("video", "image", "gif"). None = infer from the spec's
+    # modality via resolved_media_types(); an explicit list overrides that default.
+    media_types: list[str] | None = None
+
+
+# Asset types implied by each media modality when constraints.media_types is unset.
+_MEDIA_TYPES_BY_MODALITY: dict[str, frozenset[str]] = {
+    "video": frozenset({"video"}),
+    "image": frozenset({"image", "gif"}),
+}
+
+
+def resolved_media_types(
+    modality: str, *, constraints: DiscoveryConstraints | None = None
+) -> frozenset[str]:
+    """Which asset types a job wants from the MEDIA channel.
+
+    Defaults infer from the modality (video→{video}, image→{image, gif}, others→∅);
+    an explicit ``constraints.media_types`` overrides the inference verbatim
+    (normalized lowercase). Old specs without the field keep their exact meaning.
+    """
+    explicit = constraints.media_types if constraints is not None else None
+    if explicit:
+        return frozenset(t.strip().lower() for t in explicit if t.strip())
+    return _MEDIA_TYPES_BY_MODALITY.get((modality or "").strip().lower(), frozenset())
+
 
 class Discovery(BaseModel):
     """WHERE to get the data — the system figures this out (§0.3 'Discovery-first')."""
@@ -48,6 +80,12 @@ class Discovery(BaseModel):
         ]
     )
     constraints: DiscoveryConstraints = Field(default_factory=DiscoveryConstraints)
+    # Two-layer license policy. Acquisition defaults to known-free licenses; this
+    # flag opts a job into open-web sources whose license is unknown/absent (hits
+    # are recorded as "unknown", never invented). Distribution consent is separate:
+    # publishing publicly while unknown-license assets are present still requires
+    # its own explicit override at publish time.
+    allow_unknown_licenses: bool = False
 
     @model_validator(mode="after")
     def _check_mode_seeds(self) -> Discovery:
@@ -134,7 +172,12 @@ class JobSpec(BaseModel):
     # Discovery (sources are DISCOVERED, not required from the user)
     discovery: Discovery = Field(default_factory=Discovery)
     allowed_licenses: list[str]
-    pii_policy: str = "redact"  # redact | drop | allow
+    # None = contract default ("redact", unenforced-with-loud-degradation when the
+    # presidio extra is missing); an explicit value fail-closes instead. Explicitness
+    # must live in the VALUE (not pydantic's model_fields_set) because specs are
+    # persisted via a complete model_dump() — a round-trip would otherwise mark every
+    # defaulted field as user-configured.
+    pii_policy: Literal["redact", "drop", "allow"] | None = None
 
     # Generation config
     generator_models: list[str]
@@ -146,6 +189,10 @@ class JobSpec(BaseModel):
 
     # Output & distribution
     output_format: str = "parquet"  # jsonl | parquet
+    # Trainer-facing bundle layout, resolved against the delivery-layout registry
+    # (adh.delivery.layouts): "hf" by default, "ltx" for LTX-Video-style trainers;
+    # validated in check_job_spec.
+    delivery_layout: str = "hf"
     splits: dict = Field(default_factory=lambda: {"train": 0.9, "validation": 0.05, "test": 0.05})
     output_license: str
     distribution_target: str | None = None

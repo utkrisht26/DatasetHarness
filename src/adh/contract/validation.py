@@ -118,6 +118,18 @@ def check_job_spec(spec: JobSpec, *, base_dir: Path | None = None) -> Validation
             "record schema should set additionalProperties:false to reject unknown fields"
         )
 
+    # The delivery layout must resolve to a registered builder. Function-local
+    # import: adh.delivery imports this contract package, so the contract cannot
+    # import it at module load time.
+    from adh.delivery.layouts import known_layouts
+
+    available = known_layouts()
+    if spec.delivery_layout not in available:
+        report.errors.append(
+            f"delivery_layout={spec.delivery_layout!r} is not a registered layout "
+            f"(available: {', '.join(available)})"
+        )
+
     for ref in spec.decontaminate_against:
         p = Path(ref)
         if not p.is_absolute() and base_dir is not None:

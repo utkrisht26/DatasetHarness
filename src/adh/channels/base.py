@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable, Protocol, runtime_checkable
 
 from adh.contract import JobSpec, SourceChannel
@@ -63,6 +64,9 @@ class FetchContext:
     # frontier when it says the aspect is saturated. Defaults to a no-op so
     # offline channels and existing callers are unaffected.
     governor: CrawlGovernor = field(default_factory=NullGovernor)
+    # MEDIA channel only: where content-addressed clip staging lives (the run's
+    # ``media_staging`` dir). None for text jobs / channels that don't stage.
+    staging_root: Path | None = None
 
 
 @runtime_checkable

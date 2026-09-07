@@ -24,6 +24,29 @@ class VerifierResult(BaseModel):
     detail: str | None = None
 
 
+class MediaRef(BaseModel):
+    """Reference to one acquired media asset backing a record (e.g. an i2v clip).
+
+    ``path`` is dataset-dir-relative and content-addressed (``media/<sha256>.<ext>``
+    under the default ``hf`` delivery layout). ``bytes``/``duration_s``/``width``/
+    ``height`` are probed from the staged file at acquisition time; ``attribution``
+    carries the source's required credit line.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    role: str = "video"
+    path: str
+    sha256: str
+    bytes: int = Field(ge=1)
+    duration_s: float | None = None
+    width: int | None = None
+    height: int | None = None
+    fps: float | None = None
+    format: str = "mp4"
+    attribution: str | None = None
+
+
 class Record(BaseModel):
     """One JSONL line / Parquet row.
 
@@ -41,6 +64,8 @@ class Record(BaseModel):
     # --- payload ---
     input: str
     output: str
+    # --- media payload (modality extensions; None for text/code jobs) ---
+    media: MediaRef | None = None
 
     # --- source lineage (PROV wasDerivedFrom / used) ---
     source_channel: SourceChannel = SourceChannel.WEB

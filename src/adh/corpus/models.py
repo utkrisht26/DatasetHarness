@@ -29,6 +29,13 @@ class CorpusChunk:
     fetched_at: datetime
     derived_from: tuple[str, ...] = ()
     discovered_via: str = ""
+    # media chunks (MEDIA channel): probe metadata for the staged binary the
+    # content_uri points at; zero-valued for plain text chunks.
+    media_format: str = ""
+    duration_s: float | None = None
+    width: int | None = None
+    height: int | None = None
+    n_bytes: int = 0
 
     def to_manifest_row(self) -> dict:
         """Flat JSON row for ``manifest.jsonl`` (Phase 4.1)."""
@@ -46,6 +53,11 @@ class CorpusChunk:
             "fetched_at": self.fetched_at.isoformat(),
             "derived_from": list(self.derived_from),
             "discovered_via": self.discovered_via,
+            "media_format": self.media_format,
+            "duration_s": self.duration_s,
+            "width": self.width,
+            "height": self.height,
+            "n_bytes": self.n_bytes,
         }
 
     @classmethod
@@ -65,7 +77,26 @@ class CorpusChunk:
             fetched_at=datetime.fromisoformat(row["fetched_at"]),
             derived_from=tuple(row.get("derived_from", [])),
             discovered_via=row.get("discovered_via", ""),
+            media_format=row.get("media_format") or "",
+            duration_s=_opt_float(row.get("duration_s")),
+            width=_opt_int(row.get("width")),
+            height=_opt_int(row.get("height")),
+            n_bytes=int(row.get("n_bytes") or 0),
         )
+
+
+def _opt_float(value) -> float | None:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _opt_int(value) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 @dataclass(frozen=True)

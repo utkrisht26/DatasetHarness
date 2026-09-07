@@ -6,7 +6,13 @@ strategy from ``PHASE0-CONTRACT.md``. Everything downstream is built against the
 
 from __future__ import annotations
 
-from .enums import DiscoveryMode, SourceChannel, VerifiabilityTier
+from .enums import (
+    MEDIA_MODALITIES,
+    DiscoveryMode,
+    SourceChannel,
+    VerifiabilityTier,
+    is_media_modality,
+)
 from .job_spec import (
     DedupPolicy,
     Discovery,
@@ -15,9 +21,10 @@ from .job_spec import (
     JudgeConfig,
     Limits,
     TargetSize,
+    resolved_media_types,
 )
 from .loader import load_job_spec, load_job_spec_from_str
-from .record import Record, VerifierResult
+from .record import MediaRef, Record, VerifierResult
 from .validation import (
     JobSpecError,
     RecordValidationError,
@@ -33,6 +40,8 @@ __all__ = [
     "VerifiabilityTier",
     "DiscoveryMode",
     "SourceChannel",
+    "MEDIA_MODALITIES",
+    "is_media_modality",
     # job spec
     "JobSpec",
     "Discovery",
@@ -41,8 +50,10 @@ __all__ = [
     "Limits",
     "DedupPolicy",
     "TargetSize",
+    "resolved_media_types",
     # record
     "Record",
+    "MediaRef",
     "VerifierResult",
     # loader
     "load_job_spec",
