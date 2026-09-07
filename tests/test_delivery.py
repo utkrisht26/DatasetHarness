@@ -83,6 +83,30 @@ def test_write_parquet_roundtrips(tmp_path):
     assert scores == {"overall": 4.0}
 
 
+def test_evals_read_parquet_decodes_nested_fields(tmp_path):
+    """The §4.2 gate validates semantic rows: the writer's JSON encoding of
+    nested fields is inverted on read, so a parquet dataset can pass its own
+    schema (derived_from must be an array, not the string '[]')."""
+    pytest.importorskip("pyarrow")
+    from adh.delivery.evals import _read_parquet_rows
+
+    write_dataset(_records(), spec=_spec("parquet"), out_dir=tmp_path)
+
+    rows = _read_parquet_rows(tmp_path / "train.parquet")
+
+    assert len(rows) == 2
+    row = rows[0]
+    assert isinstance(row["derived_from"], list)  # not "'[]'"
+    assert row["judge_scores"] == {"overall": 4.0}  # decoded dict, not str
+    assert row["judge_models"] == ["m1", "m2"]
+    # free text is never JSON-decoded even when it looks like JSON
+    texty = _record(9, "train")
+    texty.input = '["not", "decoded"]'
+    write_dataset([texty], spec=_spec("parquet"), out_dir=tmp_path / "again")
+    reread = _read_parquet_rows(tmp_path / "again" / "train.parquet")
+    assert reread[0]["input"] == '["not", "decoded"]'
+
+
 def test_emit_docs_writes_datasheet_croissant_card(tmp_path):
     stats = {"total_records": 4, "counts_by_split": {"train": 2, "validation": 1, "test": 1}, "generated": 6, "accepted": 4, "accept_rate": 4 / 6}
     written = emit_docs(_spec(), stats=stats, files=["train.jsonl"], out_dir=tmp_path)

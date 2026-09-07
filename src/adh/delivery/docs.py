@@ -133,8 +133,23 @@ def emit_docs(spec, *, stats: dict, files: list[str], out_dir: str | Path) -> li
     return written
 
 
+_MIME_BY_SUFFIX = {
+    ".parquet": "application/vnd.apache.parquet",
+    ".jsonl": "application/jsonl",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+    ".mkv": "video/x-matroska",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".txt": "text/plain",
+}
+
+
 def _fmt(filename: str) -> str:
-    return "application/vnd.apache.parquet" if filename.endswith(".parquet") else "application/jsonl"
+    """MIME type for a dataset file; unknown suffixes stay honest (octet-stream)."""
+    return _MIME_BY_SUFFIX.get(Path(filename).suffix.lower(), "application/octet-stream")
 
 
 def _size_bucket(n: int) -> str:
