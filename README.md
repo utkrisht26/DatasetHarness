@@ -36,12 +36,74 @@ deduplicated, verified, training-ready dataset** with full provenance — at sca
 
 ```bash
 uv sync
-uv run pytest -q                                   # 270 tests
+uv run pytest -q                                   # 600+ tests
 uv run python examples/demo_offline.py             # end-to-end Engine A + Engine B, offline
 uv run adh discover examples/rust_async_macros.yaml
 uv run adh run examples/rust_async_macros.yaml --autonomous --no-fetch
 uv run adh serve -v                                # gateway (+ verbose step trace)
 ```
+
+## Media datasets (video & images — open-internet acquisition)
+
+Specs with `modality: "video"` or `modality: "image"` acquire **real media assets** instead of
+text about the domain — Engine A routes them exclusively to the **MEDIA channel**, never falling
+back to crawling pages *about* the topic. Assets are staged content-addressed
+(`media_staging/<sha256>.<ext>` + metadata sidecar) under the spec's `limits.max_storage_mb`
+budget, filtered by type/duration/orientation constraints and license, then packaged into records
+carrying a `MediaRef` (sha256, bytes, duration, resolution, attribution). Captions v1 come from
+**source metadata** (title/tags/alt); vision-model frame captioning is a designed-in upgrade seam.
+
+### Providers — one port, many backends
+
+Whatever this host has composes into one `CompositeMediaProvider` (priority order; every absence
+is loud on stderr, none fatal while another backend serves):
+
+| Backend | Media types | Needs | License posture |
+|---------|-------------|-------|-----------------|
+| [Openverse](https://api.openverse.org/) | image, gif | nothing (keyless; optional `OPENVERSE_API_KEY`) | CC / public-domain — known |
+| Direct-web harvest | image, gif, video | live search port (`TAVILY_API_KEY` recommended) | **unknown**, recorded honestly |
+| [Pexels](https://www.pexels.com/api/) | video | `PEXELS_API_KEY` | Pexels-License |
+| yt-dlp | video | `webvideo` extra (`uv sync --extra webvideo`) | site terms → `"unknown"` unless recognized |
+
+### License ladder (two-layer policy)
+
+1. **Acquisition defaults to known-free** — hits whose license is incompatible with the spec's
+   `output_license` are skipped; `"unknown"` is compatible with nothing.
+2. **Opt-in to the unverified web** — `discovery.allow_unknown_licenses: true` admits
+   unknown-license assets, always *recorded as* `"unknown"`, never invented.
+3. **Distribution is a separate consent** — `adh publish` **refuses public uploads while
+   unknown-license assets are present** (private/unlisted/dry-run unaffected); explicit override
+   with `--allow-unknown-licenses`.
+
+Direct-web fetching is polite and guarded by construction
+([`adh.net.httpfetch`](./src/adh/net/httpfetch.py)): per-domain rate limiting, robots.txt honoring
+(crawl-delay capped at 10s), and SSRF defenses (scheme allow-list, private-range blocks,
+per-hop DNS repinning, post-connect peer re-check). DRM boundaries are respected by design:
+yt-dlp's default refusal of protected streams **is** the boundary and its bypass flags are never
+set — if it plays in an open player we can fetch it; Netflix-class DRM stays out.
+
+Delivery picks a trainer layout via `delivery_layout`: `"hf"` (default; `media/<sha256>.<ext>` +
+parquet/jsonl — sensible for images) or `"ltx"` (LTX-Video trainer: `videos/NNNNN_<sha8>.mp4` +
+aligned `metadata.jsonl` + `prompts.txt` — sensible for video). Custom layouts register through
+[`delivery/layouts.py`](./src/adh/delivery/layouts.py). Manifest rows of `kind:"asset"` flow into
+publish uploads, Croissant distributions, and quality stats automatically.
+
+Live recipes:
+
+```bash
+# Keyless open-web images — no API key required (examples/openverse_images.yaml):
+uv sync --extra web --extra agents --extra deliver
+uv run adh run examples/openverse_images.yaml --yes
+uv run adh publish examples/openverse_images.yaml --repo-id <you>/images --dry-run
+
+# Stock video clips (examples/dance_i2v_ltx.yaml):
+export PEXELS_API_KEY=<free key from https://www.pexels.com/api/>
+uv sync --extra web --extra media --extra webvideo --extra agents --extra deliver
+uv run adh run examples/dance_i2v_ltx.yaml --yes
+```
+
+With no backend at all the MEDIA channel reports itself unavailable loudly on stderr — media jobs
+surface an explicit coverage-gap note rather than silently degrading to a text crawl.
 
 ## Key decisions baked in
 

@@ -32,9 +32,20 @@ def test_cli_discover_prints_plan(example_spec_path, capsys):
     assert "Fetch plan" in out
 
 
-def test_cli_run_no_fetch_autonomous(example_spec_path, tmp_path, capsys):
+def test_cli_run_no_fetch_autonomous(example_spec_path, tmp_path, capsys, monkeypatch):
+    # hermetic: no provider keys even when a developer's .env was loaded
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     rc = cli.main(
-        ["run", str(example_spec_path), "--work-dir", str(tmp_path), "--autonomous", "--no-fetch"]
+        [
+            "run",
+            str(example_spec_path),
+            "--work-dir",
+            str(tmp_path),
+            "--autonomous",
+            "--no-fetch",
+            "--no-llm",
+        ]
     )
     out = capsys.readouterr().out
     assert rc == 0

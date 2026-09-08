@@ -39,7 +39,32 @@ PLAN_FILE = "plan.json"
 # exit reasons that count as a successful terminal state (everything else FAILED)
 SUCCESS_EXIT_REASONS = frozenset({"completed", "no_sources"})
 
-_RUN_ID_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
+RUN_ID_MAX_LENGTH = 128
+RUN_ID_PATTERN = rf"^[A-Za-z0-9][A-Za-z0-9._-]{{0,{RUN_ID_MAX_LENGTH - 1}}}$"
+_RUN_ID_RE = re.compile(RUN_ID_PATTERN)
+_RUN_ID_UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def validate_run_id(run_id: str) -> str:
+    """Return a safe, single-directory run id or raise ``ValueError``.
+
+    Keeping this check in the store protects CLI and library callers in addition
+    to the HTTP validation layer.
+    """
+    if not isinstance(run_id, str) or _RUN_ID_RE.fullmatch(run_id) is None:
+        raise ValueError(
+            "run_id must start with an ASCII letter or digit and contain at most "
+            f"{RUN_ID_MAX_LENGTH} letters, digits, dots, underscores, or hyphens"
+        )
+    return run_id
+
+
+def fresh_run_id(job_id: str) -> str:
+    """Unique per-run id with a readable ``{safe(job_id)}-{suffix}`` prefix."""
+    suffix = uuid.uuid4().hex[:8]
+    prefix_limit = RUN_ID_MAX_LENGTH - len(suffix) - 1
+    safe = _RUN_ID_UNSAFE.sub("-", job_id).strip("._-")[:prefix_limit] or "run"
+    return validate_run_id(f"{safe}-{suffix}")
 
 
 class RunStatus(str, Enum):
@@ -49,6 +74,7 @@ class RunStatus(str, Enum):
     AWAITING_APPROVAL = "awaiting_approval"
     ACQUIRING = "acquiring"
     SUCCEEDED = "succeeded"
+    BUILDING = "building"  # Engine B dataset build in flight over a succeeded run
     FAILED = "failed"
     CANCELLED = "cancelled"
 
@@ -161,11 +187,16 @@ class RunStore:
         self.base_dir = Path(base_dir)
 
     def run_dir(self, run_id: str) -> Path:
-        return self.base_dir / run_id
+        candidate = self.base_dir / validate_run_id(run_id)
+        if not candidate.resolve().is_relative_to(self.base_dir.resolve()):
+            # The lexical validation above rejects traversal. This second check
+            # also refuses an existing run-directory symlink that escapes base.
+            raise ValueError(f"run directory escapes configured base: {run_id!r}")
+        return candidate
 
     def create(self, spec: JobSpec, *, run_id: str | None = None) -> RunRecord:
         job_id = spec.job_id or spec.name
-        rid = run_id or f"{_RUN_ID_SAFE.sub('-', job_id)}-{uuid.uuid4().hex[:8]}"
+        rid = run_id or fresh_run_id(job_id)
         work = self.run_dir(rid)
         save_spec(work, spec)
         return save_record(work, new_record(rid, job_id))
@@ -199,11 +230,16 @@ class RunStore:
         return load_plan(self.run_dir(run_id))
 
     def list(self) -> list[RunRecord]:
-        """All runs under the base dir, newest first (by created_at)."""
+        """All runs under the base dir, newest first (by created_at).
+
+        Runs are addressed by directory name everywhere else (``run_dir``/``get``/
+        ``set_status``), so a CLI-created or renamed dir whose run.json embeds a
+        different id is listed under its dir name — the addressable one.
+        """
         if not self.base_dir.exists():
             return []
         records = [
-            record
+            replace(record, run_id=child.name)
             for child in self.base_dir.iterdir()
             if child.is_dir() and (record := load_record(child)) is not None
         ]

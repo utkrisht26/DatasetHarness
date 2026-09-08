@@ -7,7 +7,15 @@
                              -> AWAITING_APPROVAL (parked, no thread held)
                              -> autonomous specs auto-approve inline instead
     POST /runs/{id}/approve -> ACQUIRING on a worker (resume_run) -> terminal
-    POST /runs/{id}/cancel  -> CANCELLED (only before acquisition starts)
+    POST /runs/{id}/cancel  -> CANCELLED (pre-approval or mid-acquisition; the
+                               acquiring worker polls the flag between sources)
+    POST /runs/{id}/restart -> a NEW run from the same saved spec (terminal runs
+                               only), or from an EDITED spec passed in the body;
+                               the old dir stays as history either way
+    GET  /runs/{id}/spec    -> the run's saved JobSpec (prefills edit-restart)
+    POST /runs/{id}/build   -> BUILDING on a worker (run_engine_b) -> SUCCEEDED again
+                               (outcome surfaced as state notes; retriable on failure)
+    GET  /runs/{id}/dataset -> the Engine B summary, once built
 
 Everything is injectable for offline tests: the discovery agent factory (fed a
 per-run :class:`UsageTracker` for metering) and the acquisition channels.
@@ -20,9 +28,9 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Callable
+from typing import Annotated, Callable
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Path as PathParameter
 from pydantic import BaseModel, ConfigDict, Field
 
 from adh.contract import JobSpec
@@ -30,13 +38,21 @@ from adh.discovery import ApprovalDecision, AutoApprover, DiscoveryAgent, FetchP
 from adh.generation import Generator
 from adh.llm import UsageTracker
 from adh.orchestration import RunRecord, RunStatus, RunStore, plan_run, resume_run, run_engine_b
-from adh.orchestration.state import load_state
+from adh.orchestration.run_store import RUN_ID_PATTERN, TERMINAL_STATUSES
+from adh.orchestration.state import load_state, save_state
 from adh.verification import JudgePanel
 
 logger = logging.getLogger(__name__)
 
 # agent_factory receives the run's UsageTracker so discovery spend is metered.
 AgentFactory = Callable[[UsageTracker], DiscoveryAgent]
+RunIdPath = Annotated[
+    str,
+    PathParameter(
+        pattern=RUN_ID_PATTERN,
+        description="Safe run-directory identifier returned by POST /api/runs",
+    ),
+]
 
 
 class RunConflictError(RuntimeError):
@@ -82,6 +98,49 @@ class RunsService:
         self._executor.submit(self._plan, record.run_id)
         return record
 
+    def restart(self, run_id: str, spec_override: JobSpec | None = None) -> RunRecord:
+        """Start a NEW run from a terminal run's config, with fresh lineage.
+
+        Same saved spec by default; pass ``spec_override`` to restart from an
+        edited config instead (the edit-restart flow). The old directory is
+        never touched either way (it stays as the audit trail); the fresh run is
+        queued for discovery before this returns. The provenance note is written
+        between create and queue so the worker can never race it.
+        """
+        record = self.store.get(run_id)
+        if record is None:
+            raise KeyError(run_id)
+        if record.status not in TERMINAL_STATUSES:
+            raise RunConflictError(
+                f"run {run_id!r} is {record.status.value!r}; only a finished "
+                "(terminal) run can be restarted"
+            )
+        saved = self.store.load_spec(run_id)
+        if saved is None:
+            raise FileNotFoundError(f"run {run_id!r} has no saved spec to restart from")
+        fresh_spec = saved if spec_override is None else spec_override
+        note = (
+            "restarted from run "
+            f"{run_id!r} (same spec)"
+            if fresh_spec == saved
+            else f"restarted from run {run_id!r} with edited config"
+        )
+        fresh = self.store.create(fresh_spec)
+        state = load_state(self.store.run_dir(fresh.run_id), fresh.job_id)
+        state.notes = [*state.notes, note]
+        save_state(self.store.run_dir(fresh.run_id), state)
+        self._executor.submit(self._plan, fresh.run_id)
+        return fresh
+
+    def get_spec(self, run_id: str) -> JobSpec:
+        """The run's saved spec — what an edit-restart editor prefills from."""
+        if self.store.get(run_id) is None:
+            raise KeyError(run_id)
+        spec = self.store.load_spec(run_id)
+        if spec is None:
+            raise FileNotFoundError(f"run {run_id!r} has no saved spec")
+        return spec
+
     def approve(self, run_id: str, decision: ApprovalDecision) -> RunRecord:
         with self._lock:
             record = self.store.get(run_id)
@@ -96,7 +155,12 @@ class RunsService:
         return record
 
     def build(self, run_id: str) -> RunRecord:
-        """Run Engine B (synthesis + curation) over a succeeded run, on a worker."""
+        """Engine B over a succeeded run: SUCCEEDED -> BUILDING (worker) -> SUCCEEDED.
+
+        The BUILDING write happens under the lock *before* the worker is queued,
+        so a second concurrent build sees a non-SUCCEEDED status and conflicts —
+        that transition is the re-entrancy guard.
+        """
         with self._lock:
             record = self.store.get(run_id)
             if record is None:
@@ -105,6 +169,7 @@ class RunsService:
                 raise RunConflictError(
                     f"run {run_id!r} is {record.status.value!r}; only a succeeded run can be built"
                 )
+            record = self.store.set_status(run_id, RunStatus.BUILDING)
         self._executor.submit(self._build_dataset, run_id)
         return record
 
@@ -123,10 +188,14 @@ class RunsService:
             record = self.store.get(run_id)
             if record is None:
                 raise KeyError(run_id)
-            if record.status not in (RunStatus.DISCOVERING, RunStatus.AWAITING_APPROVAL):
+            if record.status not in (
+                RunStatus.DISCOVERING,
+                RunStatus.AWAITING_APPROVAL,
+                RunStatus.ACQUIRING,
+            ):
                 raise RunConflictError(
-                    f"run {run_id!r} is {record.status.value!r}; only a run that has "
-                    "not started acquiring can be cancelled"
+                    f"run {run_id!r} is {record.status.value!r}; only a non-terminal "
+                    "run can be cancelled"
                 )
             self._cancelled.add(run_id)
             return self.store.set_status(run_id, RunStatus.CANCELLED)
@@ -145,9 +214,11 @@ class RunsService:
             self.store.set_status(run_id, RunStatus.FAILED, error="spec.json missing")
             return
         usage = UsageTracker()
-        agent = self._agent_factory(usage)
         logger.info("run %s: discovery starting (job=%s)", run_id, spec.job_id or spec.name)
         try:
+            # inside the try: a raising agent factory (bad key, provider down) must
+            # land the run FAILED rather than hang it in DISCOVERING forever
+            agent = self._agent_factory(usage)
             planned = plan_run(
                 spec, work_dir=self.store.run_dir(run_id), agent=agent, usage=usage
             )
@@ -190,6 +261,7 @@ class RunsService:
                 decision,
                 channels=self._channels,
                 max_items_per_source=self._max_items_per_source,
+                should_cancel=lambda: run_id in self._cancelled,
             )
         except Exception:  # noqa: BLE001 - resume_run recorded FAILED; keep the worker alive
             logger.exception("acquisition failed for run %s", run_id)
@@ -197,10 +269,19 @@ class RunsService:
             logger.info("run %s: acquisition finished", run_id)
 
     def _build_dataset(self, run_id: str) -> None:
-        """Worker: run Engine B over a succeeded run's corpus into a dataset."""
+        """Worker: run Engine B, then restore SUCCEEDED either way.
+
+        The run's Engine A result stays valid regardless of the build outcome, so
+        the record always returns to SUCCEEDED; what changed is surfaced as a
+        durable state note (and via the dataset endpoint). A failed build is
+        therefore retriable with another POST /build — and a build that generated
+        nothing (e.g. a transient provider outage) regenerates its seeds instead
+        of re-skipping them.
+        """
         spec = self.store.load_spec(run_id)
         if spec is None:  # pragma: no cover - a succeeded run always has its spec
             logger.error("run %s: cannot build — spec.json missing", run_id)
+            self._note_and_restore(run_id, "engine B build failed: spec.json missing")
             return
         usage = UsageTracker()
         logger.info("run %s: dataset build starting (job=%s)", run_id, spec.job_id or spec.name)
@@ -212,10 +293,11 @@ class RunsService:
                 judge=self._eb_judge,
                 usage=usage,
             )
-        except Exception:  # noqa: BLE001 - a failed build must not kill the worker
+        except Exception as exc:  # noqa: BLE001 - a failed build must not kill the worker
             logger.exception(
                 "run %s: dataset build failed after %d token(s)", run_id, usage.total.total_tokens
             )
+            self._note_and_restore(run_id, f"engine B build failed: {exc}")
             return
         logger.info(
             "run %s: dataset build done — %d record(s), exit=%s, %d token(s)",
@@ -224,6 +306,20 @@ class RunsService:
             result.exit_reason,
             usage.total.total_tokens,
         )
+        self._note_and_restore(
+            run_id,
+            f"engine B build finished: {result.n_records} record(s), exit={result.exit_reason}",
+        )
+
+    def _note_and_restore(self, run_id: str, note: str) -> None:
+        """Append a durable note to the run's state and restore SUCCEEDED."""
+        run_dir = self.store.run_dir(run_id)
+        record = self.store.get(run_id)
+        job_id = record.job_id if record else ""
+        state = load_state(run_dir, job_id)
+        state.notes = list(state.notes) + [note]
+        save_state(run_dir, state)
+        self.store.set_status(run_id, RunStatus.SUCCEEDED)
 
 
 def _default_agent(usage: UsageTracker) -> DiscoveryAgent:
@@ -242,6 +338,18 @@ class ApprovalRequest(BaseModel):
     approved_source_ids: list[str] | None = None
     approve_synthesis: bool = True
     reason: str = ""
+
+
+class RestartRequest(BaseModel):
+    """Optional POST body for restart.
+
+    Omitted entirely (or ``{"spec": null}``) restarts with the run's saved
+    config; a full ``spec`` restarts from that edited config instead.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    spec: JobSpec | None = None
 
 
 class MetricsOut(BaseModel):
@@ -415,5 +523,51 @@ def build_runs_router(runs: RunsService) -> APIRouter:
             raise HTTPException(status_code=404, detail=f"unknown run {run_id!r}") from None
         except RunConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from None
+
+    @router.get("/{run_id}/spec")
+    def get_run_spec(run_id: RunIdPath) -> JobSpec:
+        """The run's saved spec — the prefill source for edit-and-restart."""
+        try:
+            return runs.get_spec(run_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"unknown run {run_id!r}") from None
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+
+    @router.post("/{run_id}/restart", status_code=202)
+    def restart_run(run_id: RunIdPath, body: RestartRequest | None = None) -> RunSummaryOut:
+        """Start a NEW run from a finished (terminal) one — same saved spec, or an
+        edited one passed as ``{"spec": {...}}`` in the body."""
+        try:
+            return _summary(runs.restart(run_id, body.spec if body is not None else None))
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"unknown run {run_id!r}") from None
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from None
+        except RunConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from None
+
+    @router.post("/{run_id}/build", status_code=202)
+    def build_run(run_id: RunIdPath) -> RunSummaryOut:
+        """Kick off Engine B (synthesis + curation) over a succeeded run's corpus."""
+        try:
+            return _summary(runs.build(run_id))
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"unknown run {run_id!r}") from None
+        except RunConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from None
+
+    @router.get("/{run_id}/dataset")
+    def get_dataset(run_id: RunIdPath) -> dict:
+        """The Engine B summary once a dataset has been built, else 404."""
+        if runs.get(run_id) is None:
+            raise HTTPException(status_code=404, detail=f"unknown run {run_id!r}")
+        summary = runs.dataset_summary(run_id)
+        if summary is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"run {run_id!r} has no built dataset yet (POST /build first)",
+            )
+        return summary
 
     return router

@@ -92,3 +92,23 @@ def test_store_list_is_newest_first_and_skips_junk(tmp_path, minimal_spec_dict):
 
 def test_store_get_unknown_run_is_none(tmp_path):
     assert RunStore(tmp_path).get("nope") is None
+
+
+def test_store_list_reports_dir_name_as_run_id(tmp_path, minimal_spec_dict):
+    """Runs are addressed by directory name (run_dir/get/set_status all resolve
+    that way), so a CLI-created or renamed dir whose run.json embeds a different
+    id must still be listed under its addressable name — otherwise every list
+    entry with a divergent id 404s on detail."""
+    spec = _spec(minimal_spec_dict)
+    work = tmp_path / "live-gate-2"
+    work.mkdir()
+    save_spec(work, spec)
+    save_record(
+        work, new_record(run_id="rust-async-macro-patterns", job_id="rust-async-macro-patterns")
+    )
+
+    store = RunStore(tmp_path)
+    listed = store.list()
+    assert [r.run_id for r in listed] == ["live-gate-2"]
+    # the listed id must round-trip through the read path
+    assert store.get(listed[0].run_id) is not None

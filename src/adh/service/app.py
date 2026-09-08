@@ -11,8 +11,7 @@ collaborators are injectable for offline tests; the defaults wire the live stack
 
 from __future__ import annotations
 
-import logging
-import sys
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -20,13 +19,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from adh.channels.web.app import CrawlServiceApp, JudgeFactory
-from adh.llm import DEFAULT_CHAT_MODEL, UsageTracker
+from adh.llm import DEFAULT_CHAT_MODEL
+from adh.runtime import (
+    live_agent_factory as _live_agent_factory,
+    live_channels as _live_channels,
+    live_ports as _live_ports,  # noqa: F401  # re-exported for callers/tests that patch it
+)
 
 from .routers.crawl import build_crawl_router
 from .routers.runs import RunsService, build_runs_router
 from .spa import mount_spa
-
-logger = logging.getLogger(__name__)
 
 
 def create_app(
@@ -77,68 +79,3 @@ def create_app(
 
     mount_spa(app)
     return app
-
-
-# ------------------------------------------------------------- live defaults
-def _live_agent_factory(discovery_model: str | None):
-    """Deep discovery over live ports when configured; heuristic otherwise.
-
-    The factory receives the run's :class:`UsageTracker` so every deepagents
-    model call is metered into that run's metrics (decision 4).
-    """
-    from adh.discovery import (
-        DeepAgentDiscoveryAgent,
-        FallbackDiscoveryAgent,
-        SourceDiscoveryAgent,
-    )
-
-    search, registry = _live_ports()
-
-    def factory(usage: UsageTracker):
-        heuristic = SourceDiscoveryAgent(search=search, registry=registry)
-        if discovery_model is None:
-            return heuristic
-        return FallbackDiscoveryAgent(
-            primary=DeepAgentDiscoveryAgent(
-                model=discovery_model, search=search, registry=registry, usage=usage
-            ),
-            fallback=heuristic,
-        )
-
-    return factory
-
-
-def _live_ports():
-    """Best live search/registry ports available; in-memory stubs otherwise."""
-    from adh.search import InMemoryDatasetRegistry, InMemorySearchProvider
-
-    search = InMemorySearchProvider()  # no live web meta-search adapter yet
-    try:
-        from adh.search.hf_registry import HfDatasetRegistry
-
-        registry = HfDatasetRegistry()
-    except Exception as exc:  # pragma: no cover - needs the datasets extra
-        logger.warning("HF dataset registry unavailable (%s); using in-memory stub", exc)
-        registry = InMemoryDatasetRegistry()
-    return search, registry
-
-
-def _live_channels() -> dict:
-    """Wire real acquisition channels when their extras are importable."""
-    from adh.contract import SourceChannel
-
-    channels: dict = {}
-    try:
-        from adh.channels import WebChannel
-        from adh.channels.web import Crawl4AIContentFetcher
-
-        channels[SourceChannel.WEB] = WebChannel(fetcher=Crawl4AIContentFetcher())
-    except Exception as exc:  # pragma: no cover - needs the web extra
-        print(f"[adh] web channel unavailable: {exc}", file=sys.stderr)
-    try:
-        from adh.channels import DatasetsChannel, HfDatasetLoader
-
-        channels[SourceChannel.DATASETS] = DatasetsChannel(loader=HfDatasetLoader())
-    except Exception as exc:  # pragma: no cover - needs the datasets extra
-        print(f"[adh] datasets channel unavailable: {exc}", file=sys.stderr)
-    return channels
