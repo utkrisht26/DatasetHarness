@@ -28,6 +28,7 @@ from adh.runtime import (
 
 from .routers.crawl import build_crawl_router
 from .routers.runs import RunsService, build_runs_router
+from .security import API_KEY_ENV, BearerTokenMiddleware
 from .spa import mount_spa
 
 
@@ -40,8 +41,14 @@ def create_app(
     fetcher=None,
     llm_judge_factory: JudgeFactory | None = None,
     workers: int = 2,
+    api_key: str | None = None,
 ) -> FastAPI:
-    """Build the gateway app. ``discovery_model=None`` -> heuristic-only discovery."""
+    """Build the gateway app.
+
+    ``discovery_model=None`` selects heuristic-only discovery. A non-empty
+    ``api_key`` (or ``ADH_API_KEY``) protects every API route except the
+    top-level liveness probe.
+    """
     crawl = crawl_service or CrawlServiceApp(
         fetcher, llm_judge_factory=llm_judge_factory, workers=workers
     )
@@ -62,12 +69,27 @@ def create_app(
     app.state.crawl = crawl
     app.state.runs = runs
 
+    configured_api_key = api_key if api_key is not None else os.environ.get(API_KEY_ENV)
+    app.state.auth_enabled = bool(configured_api_key)
+    if configured_api_key:
+        # Add auth before CORS so CORS remains the outer middleware and browser
+        # clients receive the appropriate headers even on a 401 response.
+        app.add_middleware(BearerTokenMiddleware, token=configured_api_key)
+
+    # CORS is opt-in via ADH_CORS_ORIGINS (comma-separated). The bundled SPA is
+    # same-origin and needs none; wildcard origins with credentials are never
+    # combined (browsers reject the pair, and it would be a CSRF hazard anyway).
+    cors_origins = [
+        o.strip()
+        for o in os.environ.get("ADH_CORS_ORIGINS", "").split(",")
+        if o.strip()
+    ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=cors_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization"],
     )
 
     app.include_router(build_crawl_router(crawl), prefix="/api/crawl")
@@ -75,7 +97,11 @@ def create_app(
 
     @app.get("/api/healthz")
     def healthz() -> dict:
-        return {"status": "ok", "crawl_jobs": crawl.counts()}
+        return {
+            "status": "ok",
+            "auth_enabled": app.state.auth_enabled,
+            "crawl_jobs": crawl.counts(),
+        }
 
     mount_spa(app)
     return app

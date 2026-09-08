@@ -139,6 +139,20 @@ offline tests — the defaults wire the live stack when the extras are installed
 operator console that consumes this surface is specced in [`DESIGN.md`](./DESIGN.md) and
 [`docs/design/`](./docs/design).
 
+API authentication is enabled when `ADH_API_KEY` is set. Send the value as a bearer token on
+every `/api/*` request; `/api/healthz` remains public for liveness probes. The CLI refuses to bind
+to a non-loopback address without a key unless the operator explicitly accepts the risk with
+`--allow-unauthenticated`:
+
+```bash
+export ADH_API_KEY="$(openssl rand -hex 32)"
+uv run adh serve --host 0.0.0.0
+curl -H "Authorization: Bearer $ADH_API_KEY" http://127.0.0.1:8000/api/runs
+```
+
+This shared-key perimeter is suitable for a single trusted operator. Multi-tenant deployments
+still require an identity provider plus per-run ownership and authorization checks.
+
 ```bash
 uv pip install -e '.[serve]'   # + FastAPI/uvicorn over the web channel
 uv pip install -e '.[all]'     # + Crawl4AI, deepagents, huggingface_hub adapters

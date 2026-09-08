@@ -241,6 +241,9 @@ class RunStore:
         records = [
             replace(record, run_id=child.name)
             for child in self.base_dir.iterdir()
-            if child.is_dir() and (record := load_record(child)) is not None
+            if not child.is_symlink()
+            and child.is_dir()
+            and _RUN_ID_RE.fullmatch(child.name) is not None
+            and (record := load_record(child)) is not None
         ]
         return sorted(records, key=lambda r: r.created_at, reverse=True)

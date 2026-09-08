@@ -471,7 +471,7 @@ def build_runs_router(runs: RunsService) -> APIRouter:
         return [_summary(r) for r in runs.list()]
 
     @router.get("/{run_id}")
-    def get_run(run_id: str) -> RunOut:
+    def get_run(run_id: RunIdPath) -> RunOut:
         record = runs.get(run_id)
         if record is None:
             raise HTTPException(status_code=404, detail=f"unknown run {run_id!r}")
@@ -485,7 +485,7 @@ def build_runs_router(runs: RunsService) -> APIRouter:
         )
 
     @router.post("/{run_id}/approve")
-    def approve_run(run_id: str, body: ApprovalRequest) -> RunSummaryOut:
+    def approve_run(run_id: RunIdPath, body: ApprovalRequest) -> RunSummaryOut:
         if runs.get(run_id) is None:
             raise HTTPException(status_code=404, detail=f"unknown run {run_id!r}")
         plan = runs.store.load_plan(run_id)
@@ -516,7 +516,7 @@ def build_runs_router(runs: RunsService) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(exc)) from None
 
     @router.post("/{run_id}/cancel")
-    def cancel_run(run_id: str) -> RunSummaryOut:
+    def cancel_run(run_id: RunIdPath) -> RunSummaryOut:
         try:
             return _summary(runs.cancel(run_id))
         except KeyError:

@@ -290,15 +290,29 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         import uvicorn
 
         from adh.service.app import create_app
+        from adh.service.security import API_KEY_ENV, is_loopback_host
     except ImportError as exc:  # pragma: no cover - needs the serve extra
         print(
             f"[adh] service needs the serve extra: pip install 'adh[serve]' ({exc})",
             file=sys.stderr,
         )
         return 1
+    api_key = os.environ.get(API_KEY_ENV)
+    if (
+        not api_key
+        and not is_loopback_host(args.host)
+        and not getattr(args, "allow_unauthenticated", False)
+    ):
+        print(
+            f"[adh] refusing unauthenticated service on {args.host!r}; set {API_KEY_ENV} "
+            "or pass --allow-unauthenticated to acknowledge the risk",
+            file=sys.stderr,
+        )
+        return 2
     app = create_app(
         runs_dir=args.runs_dir,
         discovery_model=None if args.no_llm else args.discovery_model,
+        api_key=api_key,
     )
     uvicorn.run(app, host=args.host, port=args.port)
     return 0
@@ -581,7 +595,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8000)
-    p_serve.add_argument("--runs-dir", default="./runs", help="base directory for run dirs")
+    p_serve.add_argument(
+        "--runs-dir", default="./runs", help="base directory for run dirs"
+    )
+    p_serve.add_argument(
+        "--allow-unauthenticated",
+        action="store_true",
+        help="allow a non-loopback bind without ADH_API_KEY (unsafe; explicit opt-out)",
+    )
     p_serve.add_argument(
         "--discovery-model",
         default=DEFAULT_CHAT_MODEL,
