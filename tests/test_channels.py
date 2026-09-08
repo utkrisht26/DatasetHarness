@@ -99,9 +99,7 @@ def test_datasets_channel_one_chunk_per_record(minimal_spec_dict, tmp_path):
     )
     channel = DatasetsChannel(loader=loader)
     ctx = _ctx(minimal_spec_dict, tmp_path)
-    src = _ranked(
-        SourceChannel.DATASETS, "https://huggingface.co/datasets/org/ds", license_="MIT"
-    )
+    src = _ranked(SourceChannel.DATASETS, "https://huggingface.co/datasets/org/ds", license_="MIT")
     chunks = channel.fetch(src, ctx)
     assert len(chunks) == 3
     assert all(c.source_channel == SourceChannel.DATASETS for c in chunks)

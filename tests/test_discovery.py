@@ -127,7 +127,9 @@ def test_unknown_domain_no_synthesis_is_coverage_gap(minimal_spec_dict):
     spec_dict["description"] = "obscure niche topic zzqq about widget flanges"
     spec_dict["motivation"] = "specialized flange knowledge"
     spec = JobSpec.model_validate(spec_dict)
-    agent = SourceDiscoveryAgent(registry=InMemoryDatasetRegistry(), search=InMemorySearchProvider())
+    agent = SourceDiscoveryAgent(
+        registry=InMemoryDatasetRegistry(), search=InMemorySearchProvider()
+    )
     plan = agent.discover(spec, DUMMY_PATH)
     assert plan.is_empty
     assert any("coverage gap" in n for n in plan.notes)
@@ -253,7 +255,9 @@ def test_callback_approver_picks_subset(minimal_spec_dict):
 
 
 def test_apply_decision_can_drop_synthesis(minimal_spec_dict):
-    agent = SourceDiscoveryAgent(registry=InMemoryDatasetRegistry(), search=InMemorySearchProvider())
+    agent = SourceDiscoveryAgent(
+        registry=InMemoryDatasetRegistry(), search=InMemorySearchProvider()
+    )
     plan = agent.discover(make_spec(minimal_spec_dict), DUMMY_PATH)
     assert plan.synthesis_aspects
     decision = ApprovalDecision(approved_source_ids=frozenset(), approve_synthesis=False)

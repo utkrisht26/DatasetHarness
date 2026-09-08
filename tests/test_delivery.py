@@ -108,7 +108,13 @@ def test_evals_read_parquet_decodes_nested_fields(tmp_path):
 
 
 def test_emit_docs_writes_datasheet_croissant_card(tmp_path):
-    stats = {"total_records": 4, "counts_by_split": {"train": 2, "validation": 1, "test": 1}, "generated": 6, "accepted": 4, "accept_rate": 4 / 6}
+    stats = {
+        "total_records": 4,
+        "counts_by_split": {"train": 2, "validation": 1, "test": 1},
+        "generated": 6,
+        "accepted": 4,
+        "accept_rate": 4 / 6,
+    }
     written = emit_docs(_spec(), stats=stats, files=["train.jsonl"], out_dir=tmp_path)
     names = {p.name for p in written}
     assert names == {"datasheet.md", "croissant.json", "README.md"}
@@ -119,7 +125,14 @@ def test_emit_docs_writes_datasheet_croissant_card(tmp_path):
 
 
 def test_datasheet_reports_drop_breakdown():
-    stats = {"total_records": 2, "generated": 5, "accepted": 2, "accept_rate": 0.4, "dropped_quality": 1, "dropped_jury": 2}
+    stats = {
+        "total_records": 2,
+        "generated": 5,
+        "accepted": 2,
+        "accept_rate": 0.4,
+        "dropped_quality": 1,
+        "dropped_jury": 2,
+    }
     md = datasheet_md(_spec(), stats)
     assert "accept rate 40.0%" in md
     assert "quality: 1" in md and "jury: 2" in md

@@ -159,7 +159,10 @@ def test_single_seed_no_links():
 def test_deep_crawl_expands_frontier():
     svc = _SyncFakeService(
         {
-            "https://example.com/root": ("root", ["https://example.com/a", "https://example.com/b"]),
+            "https://example.com/root": (
+                "root",
+                ["https://example.com/a", "https://example.com/b"],
+            ),
             "https://example.com/a": ("a body", []),
             "https://example.com/b": ("b body", []),
         }
@@ -305,7 +308,9 @@ def test_keyword_scorer_ranks_on_topic_above_off_topic_and_kills_off_host():
     scorer = KeywordRelevanceScorer.from_seed(seed, ("views view class-based generic mixin",))
 
     on_topic = scorer.score("https://docs.djangoproject.com/en/6.0/ref/views/")
-    sibling = scorer.score("https://docs.djangoproject.com/en/6.0/topics/http/shortcuts/", anchor="render")
+    sibling = scorer.score(
+        "https://docs.djangoproject.com/en/6.0/topics/http/shortcuts/", anchor="render"
+    )
     off_topic = scorer.score("https://docs.djangoproject.com/en/6.0/topics/forms/", anchor="Forms")
     off_host = scorer.score("https://www.djangoproject.com/fundraising/", anchor="Fundraising")
 
@@ -561,9 +566,7 @@ def test_content_judge_drops_off_topic_pages_and_their_links():
     )
     router = CrawlRouter(svc, workers=1, max_depth=3)
     seed = CrawlRequest(url="https://site.com/views/", keywords=(_VIEWS_QUERY,))
-    policy = FrontierPolicy(
-        judge=Bm25RelevanceJudge(), content_threshold=0.3, query=_VIEWS_QUERY
-    )
+    policy = FrontierPolicy(judge=Bm25RelevanceJudge(), content_threshold=0.3, query=_VIEWS_QUERY)
     pages = router.run_job(seed, max_pages=10, policy=policy)
     urls = {p.url for p in pages}
     assert "https://site.com/cbv/" in urls  # on-topic kept

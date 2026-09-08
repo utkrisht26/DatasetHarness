@@ -31,8 +31,7 @@ class CorpusStore(Protocol):
         """Read content back by its ``content_uri``."""
         ...
 
-    def exists(self, content_uri: str) -> bool:
-        ...
+    def exists(self, content_uri: str) -> bool: ...
 
     def size_mb(self, job_id: str) -> float:
         """Total stored bytes for a job, in MB (for the storage circuit-breaker)."""

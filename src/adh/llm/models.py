@@ -62,9 +62,7 @@ def env_model_list(env_name: str) -> list[str]:
     return [part.strip() for part in raw.split(",") if part.strip()]
 
 
-def build_chat_model(
-    model_id: str = DEFAULT_CHAT_MODEL, **kwargs: Any
-) -> "BaseChatModel":
+def build_chat_model(model_id: str = DEFAULT_CHAT_MODEL, **kwargs: Any) -> "BaseChatModel":
     """Return a configured LangChain chat model for ``model_id``.
 
     ``model_id`` is a LangChain provider id (``"anthropic:…"``, ``"openai:…"``, …).

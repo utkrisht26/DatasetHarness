@@ -108,9 +108,7 @@ def test_store_list_reports_dir_name_as_run_id(tmp_path, minimal_spec_dict):
     save_spec(work, spec)
     save_record(
         work,
-        new_record(
-            run_id="rust-async-macro-patterns", job_id="rust-async-macro-patterns"
-        ),
+        new_record(run_id="rust-async-macro-patterns", job_id="rust-async-macro-patterns"),
     )
 
     store = RunStore(tmp_path)

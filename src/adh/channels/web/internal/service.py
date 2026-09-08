@@ -72,9 +72,7 @@ async def _default_host_resolver(host: str) -> list[str]:
     """
     encoded = host.encode("idna").decode("ascii")
     loop = asyncio.get_running_loop()
-    infos = await loop.getaddrinfo(
-        encoded, None, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP
-    )
+    infos = await loop.getaddrinfo(encoded, None, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
     return [str(info[4][0]).split("%", 1)[0] for info in infos]
 
 
@@ -145,7 +143,9 @@ def _default_crawler_factory() -> _Crawler:
     return AsyncWebCrawler(config=BrowserConfig())
 
 
-def _default_run_config(request: CrawlRequest) -> object:  # pragma: no cover - needs crawl4ai
+def _default_run_config(
+    request: CrawlRequest,
+) -> object:  # pragma: no cover - needs crawl4ai
     # crawl4ai 0.9 moved the content filter behind the markdown generator;
     # ``CrawlerRunConfig(content_filter=...)`` (the 0.8 signature) is gone. The
     # PruningContentFilter still produces ``result.markdown.fit_markdown``.
@@ -303,9 +303,7 @@ class CrawlService:
             except ValueError:
                 continue  # unparseable resolver output; the dial itself will fail
             if _is_blocked_ip(ip):
-                logger.warning(
-                    "SSRF guard blocked %r: hostname %r resolves to %s", url, host, ip
-                )
+                logger.warning("SSRF guard blocked %r: hostname %r resolves to %s", url, host, ip)
                 return f"blocked private/internal address (SSRF guard): {host} resolves to {ip}"
         return None
 
@@ -329,7 +327,9 @@ class CrawlService:
                 return CrawlResponse(url=request.url, error=reason, **_echo(request))
         if self._pages_scraped >= self.config.max_pages_scraped:
             return CrawlResponse(
-                url=request.url, error="service max_pages_scraped reached", **_echo(request)
+                url=request.url,
+                error="service max_pages_scraped reached",
+                **_echo(request),
             )
 
         async with self._semaphore:
@@ -384,13 +384,17 @@ class CrawlService:
         try:
             future = self.run_coroutine(self.acrawl(request))
         except RuntimeError as exc:  # loop not running (closing/closed)
-            return CrawlResponse(url=request.url, error=f"service unavailable: {exc}", **_echo(request))
+            return CrawlResponse(
+                url=request.url, error=f"service unavailable: {exc}", **_echo(request)
+            )
         try:
             return future.result(timeout=budget)
         except FutureTimeoutError:
             future.cancel()
             return CrawlResponse(
-                url=request.url, error="request timed out at the bridge", **_echo(request)
+                url=request.url,
+                error="request timed out at the bridge",
+                **_echo(request),
             )
         except Exception as exc:  # noqa: BLE001 - surface as an error response
             return CrawlResponse(url=request.url, error=f"bridge error: {exc}", **_echo(request))

@@ -70,10 +70,7 @@ class MediaPackager:
         sha = clip.stem if len(clip.stem) == 64 else (seed.source_sha256 or "")
         stat = clip.stat()
         media = MediaRef(
-            role=str(
-                meta.get("media_type")
-                or _ROLE_BY_SUFFIX.get(clip.suffix.lower(), "video")
-            ),
+            role=str(meta.get("media_type") or _ROLE_BY_SUFFIX.get(clip.suffix.lower(), "video")),
             path=f"media/{sha}{clip.suffix.lower()}",
             sha256=sha,
             bytes=stat.st_size,
@@ -87,9 +84,7 @@ class MediaPackager:
         if not caption:
             logger.warning("media packager: no caption metadata for %s — skipping", clip.name)
             return []
-        input_text = (
-            f"{seed.topic}: asset {sha[:8]}" if seed.topic else f"asset {sha[:8]}"
-        )
+        input_text = f"{seed.topic}: asset {sha[:8]}" if seed.topic else f"asset {sha[:8]}"
 
         return [
             Candidate(

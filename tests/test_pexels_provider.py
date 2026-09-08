@@ -153,8 +153,12 @@ def test_videos_without_mp4_rendition_are_skipped():
             _video_payload(
                 id=2,
                 video_files=[
-                    {"file_type": "video/quicktime", "width": 1920, "height": 1080,
-                     "link": "https://cdn.pexels.com/x.mov"},
+                    {
+                        "file_type": "video/quicktime",
+                        "width": 1920,
+                        "height": 1080,
+                        "link": "https://cdn.pexels.com/x.mov",
+                    },
                 ],
             ),
         ]

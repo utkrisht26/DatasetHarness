@@ -49,9 +49,7 @@ class RoutedGenerator:
 
     tiers: tuple[Callable[[], Generator], ...]
     _built: dict[int, Generator] = field(default_factory=dict, init=False)
-    _calls: defaultdict[str, int] = field(
-        default_factory=lambda: defaultdict(int), init=False
-    )
+    _calls: defaultdict[str, int] = field(default_factory=lambda: defaultdict(int), init=False)
     escalations: int = field(default=0, init=False)
     exhausted: int = field(default=0, init=False)
 
@@ -61,11 +59,7 @@ class RoutedGenerator:
         return dict(self._calls)
 
     def generate(self, seed, *, spec, store=None) -> list:
-        start = (
-            len(self.tiers) - 1
-            if seed.difficulty in _FRONTIER_DIFFICULTIES
-            else 0
-        )
+        start = len(self.tiers) - 1 if seed.difficulty in _FRONTIER_DIFFICULTIES else 0
         for index in range(start, len(self.tiers)):
             self._calls[f"tier{index}"] += 1
             candidates = self._dispatch(index, seed, spec=spec, store=store)
@@ -74,7 +68,9 @@ class RoutedGenerator:
             if candidates is None:
                 logger.warning(
                     "generation tier%d exhausted %d attempt(s) for seed %s",
-                    index, _TIER_ATTEMPTS, seed.seed_id,
+                    index,
+                    _TIER_ATTEMPTS,
+                    seed.seed_id,
                 )
             else:
                 logger.info("generation tier%d returned nothing for seed %s", index, seed.seed_id)
@@ -92,7 +88,11 @@ class RoutedGenerator:
             except Exception as exc:  # noqa: BLE001 - a failed attempt retries, then escalates
                 logger.warning(
                     "generation tier%d attempt %d/%d failed on seed %s: %s",
-                    index, attempt + 1, _TIER_ATTEMPTS, seed.seed_id, exc,
+                    index,
+                    attempt + 1,
+                    _TIER_ATTEMPTS,
+                    seed.seed_id,
+                    exc,
                 )
                 if attempt < _TIER_ATTEMPTS - 1 and _RETRY_BACKOFF_SECONDS:
                     delay = _RETRY_BACKOFF_SECONDS[min(attempt, len(_RETRY_BACKOFF_SECONDS) - 1)]
@@ -109,6 +109,4 @@ class RoutedGenerator:
 
 def routed_from_models(model_ids, usage=None) -> tuple[Callable[[], LlmGenerator], ...]:
     """Lazy per-model constructors so an unused frontier tier never builds."""
-    return tuple(
-        lambda mid=mid, u=usage: LlmGenerator(model_id=mid, usage=u) for mid in model_ids
-    )
+    return tuple(lambda mid=mid, u=usage: LlmGenerator(model_id=mid, usage=u) for mid in model_ids)

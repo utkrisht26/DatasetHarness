@@ -208,7 +208,10 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
 
 def _flatten_for_parquet(row: dict) -> dict:
     """JSON-encode non-scalar values so every Parquet column is a flat scalar."""
-    return {k: (v if isinstance(v, _SCALAR) else json.dumps(v, ensure_ascii=False)) for k, v in row.items()}
+    return {
+        k: (v if isinstance(v, _SCALAR) else json.dumps(v, ensure_ascii=False))
+        for k, v in row.items()
+    }
 
 
 def decode_parquet_row(row: dict) -> dict:

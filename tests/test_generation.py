@@ -48,7 +48,9 @@ def _spec(tier=2, modality="text", **kw):
     return JobSpec(**base)
 
 
-def _chunk(aspect_id="a1", text="Async macros let you write concise code.", channel=SourceChannel.WEB):
+def _chunk(
+    aspect_id="a1", text="Async macros let you write concise code.", channel=SourceChannel.WEB
+):
     return CorpusChunk(
         chunk_id=f"job:{aspect_id}:abc",
         job_id="job",
@@ -84,8 +86,12 @@ def test_seed_engine_balances_across_aspects():
 
 
 def test_seed_engine_is_deterministic():
-    a = SeedEngine(seed=7).plan("job", aspects=ASPECTS, chunks=[_chunk("a1")], handoffs=[], n_seeds=4)
-    b = SeedEngine(seed=7).plan("job", aspects=ASPECTS, chunks=[_chunk("a1")], handoffs=[], n_seeds=4)
+    a = SeedEngine(seed=7).plan(
+        "job", aspects=ASPECTS, chunks=[_chunk("a1")], handoffs=[], n_seeds=4
+    )
+    b = SeedEngine(seed=7).plan(
+        "job", aspects=ASPECTS, chunks=[_chunk("a1")], handoffs=[], n_seeds=4
+    )
     assert [s.seed_id for s in a] == [s.seed_id for s in b]
 
 
@@ -97,7 +103,9 @@ def test_seed_engine_covers_synthesis_handoffs():
 
 
 def test_seed_engine_zero_seeds():
-    assert SeedEngine().plan("job", aspects=ASPECTS, chunks=[_chunk()], handoffs=[], n_seeds=0) == []
+    assert (
+        SeedEngine().plan("job", aspects=ASPECTS, chunks=[_chunk()], handoffs=[], n_seeds=0) == []
+    )
 
 
 # --------------------------------------------------------------------- novelty gate
@@ -110,7 +118,9 @@ def test_novelty_gate_rejects_near_duplicate():
 
 # --------------------------------------------------------------------- heuristic generator
 def test_heuristic_generator_soft_grounds_in_corpus():
-    seeds = SeedEngine().plan("job", aspects=ASPECTS[:1], chunks=[_chunk("a1")], handoffs=[], n_seeds=1)
+    seeds = SeedEngine().plan(
+        "job", aspects=ASPECTS[:1], chunks=[_chunk("a1")], handoffs=[], n_seeds=1
+    )
     cands = HeuristicGenerator().generate(seeds[0], spec=_spec(tier=2))
     assert len(cands) == 1
     c = cands[0]
@@ -122,7 +132,9 @@ def test_heuristic_generator_soft_grounds_in_corpus():
 
 def test_heuristic_generator_hard_code_is_verifier_passing():
     spec = _spec(tier=1, modality="code", record_schema_ref="schemas/code_record.schema.json")
-    seeds = SeedEngine().plan("job", aspects=ASPECTS[:1], chunks=[_chunk("a1")], handoffs=[], n_seeds=1)
+    seeds = SeedEngine().plan(
+        "job", aspects=ASPECTS[:1], chunks=[_chunk("a1")], handoffs=[], n_seeds=1
+    )
     c = HeuristicGenerator().generate(seeds[0], spec=spec)[0]
     assert c.tests is not None
     # the offline generator must emit a genuinely passing Tier-1 pair
@@ -190,7 +202,9 @@ def test_build_generator_env_override_beats_empty_spec_too(monkeypatch):
 
 # ------------------------------------------------------- tier retry resilience
 def _one_seed():
-    return SeedEngine().plan("job", aspects=ASPECTS[:1], chunks=[_chunk("a1")], handoffs=[], n_seeds=1)[0]
+    return SeedEngine().plan(
+        "job", aspects=ASPECTS[:1], chunks=[_chunk("a1")], handoffs=[], n_seeds=1
+    )[0]
 
 
 def test_routed_generator_retries_transient_tier_failures(monkeypatch):
@@ -381,7 +395,9 @@ def test_candidate_threads_media_into_verifier_request_extras():
 
 
 def test_text_candidate_keeps_empty_verifier_extras():
-    seeds = SeedEngine().plan("job", aspects=ASPECTS[:1], chunks=[_chunk("a1")], handoffs=[], n_seeds=1)
+    seeds = SeedEngine().plan(
+        "job", aspects=ASPECTS[:1], chunks=[_chunk("a1")], handoffs=[], n_seeds=1
+    )
     cand = HeuristicGenerator().generate(seeds[0], spec=_spec())[0]
 
     assert cand.to_verifier_request().extras == {}

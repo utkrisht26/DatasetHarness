@@ -38,9 +38,7 @@ class FakeResponse:
         self.extensions: dict = {}
         if peername is not None:
             self.extensions["network_stream"] = SimpleNamespace(
-                get_extra_info=lambda key, default=None: (
-                    peername if key == "peername" else default
-                )
+                get_extra_info=lambda key, default=None: peername if key == "peername" else default
             )
 
     def iter_bytes(self, chunk_size: int = 65536):
@@ -221,9 +219,9 @@ def test_non_http_scheme_is_blocked():
 def test_redirect_hop_is_revalidated():
     client = FakeClient(
         {
-            "https://open.example/start": FakeResponse(status_code=302, headers={
-                "location": "https://rebind.example/next"
-            }),
+            "https://open.example/start": FakeResponse(
+                status_code=302, headers={"location": "https://rebind.example/next"}
+            ),
         }
     )
 
@@ -240,7 +238,9 @@ def test_redirect_hop_is_revalidated():
 
 def test_peer_ip_mismatch_blocks_before_body_is_read():
     # DNS said public, the socket connected to an RFC1918 address: rebinding.
-    evil = FakeResponse(headers=HTML_HEADERS, body=b"<html>stolen</html>", peername=("192.168.1.10", 443))
+    evil = FakeResponse(
+        headers=HTML_HEADERS, body=b"<html>stolen</html>", peername=("192.168.1.10", 443)
+    )
     client = FakeClient({"https://sneaky.example/p": evil})
     fetcher, _, _ = _fetcher(client)
 
@@ -253,7 +253,11 @@ def test_peer_ip_mismatch_blocks_before_body_is_read():
 # --------------------------------------------------------------- fetch_html
 def test_non_html_content_type_is_skipped(caplog):
     client = FakeClient(
-        {"https://example.com/api": FakeResponse(headers={"content-type": "application/json"}, body=b"{}")}
+        {
+            "https://example.com/api": FakeResponse(
+                headers={"content-type": "application/json"}, body=b"{}"
+            )
+        }
     )
     fetcher, _, _ = _fetcher(client)
 

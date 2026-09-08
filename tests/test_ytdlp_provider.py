@@ -44,12 +44,27 @@ def test_targets_for_plain_queries_need_ytsearch_opt_in():
 
 def test_progressive_mp4_prefers_highest_resolution():
     formats = [
-        {"format_id": "low", "ext": "mp4", "acodec": "mp4a.40.2", "vcodec": "avc1.64001f",
-         "height": 360},
-        {"format_id": "high", "ext": "mp4", "acodec": "mp4a.40.2", "vcodec": "avc1.640028",
-         "height": 1080},
-        {"format_id": "video-only", "ext": "webm", "acodec": "none", "vcodec": "vp9",
-         "height": 2160},
+        {
+            "format_id": "low",
+            "ext": "mp4",
+            "acodec": "mp4a.40.2",
+            "vcodec": "avc1.64001f",
+            "height": 360,
+        },
+        {
+            "format_id": "high",
+            "ext": "mp4",
+            "acodec": "mp4a.40.2",
+            "vcodec": "avc1.640028",
+            "height": 1080,
+        },
+        {
+            "format_id": "video-only",
+            "ext": "webm",
+            "acodec": "none",
+            "vcodec": "vp9",
+            "height": 2160,
+        },
     ]
 
     assert _progressive_mp4(formats)["format_id"] == "high"
@@ -103,10 +118,22 @@ INFO = {
     "width": 1280,
     "height": 720,
     "formats": [
-        {"format_id": "18", "ext": "mp4", "acodec": "mp4a.40.2", "vcodec": "avc1.42001E",
-         "height": 360, "url": "https://cdn.example/f18.mp4"},
-        {"format_id": "22", "ext": "mp4", "acodec": "mp4a.40.2", "vcodec": "avc1.64001F",
-         "height": 720, "url": "https://cdn.example/f22.mp4"},
+        {
+            "format_id": "18",
+            "ext": "mp4",
+            "acodec": "mp4a.40.2",
+            "vcodec": "avc1.42001E",
+            "height": 360,
+            "url": "https://cdn.example/f18.mp4",
+        },
+        {
+            "format_id": "22",
+            "ext": "mp4",
+            "acodec": "mp4a.40.2",
+            "vcodec": "avc1.64001F",
+            "height": 720,
+            "url": "https://cdn.example/f22.mp4",
+        },
     ],
 }
 
@@ -170,15 +197,14 @@ def test_drm_error_is_loud_skip_not_crash(caplog):
     try:
         provider = _provider()
         with caplog.at_level(logging.WARNING):
-            hits = provider.search(
-                "https://video.example/watch?v=locked", limit=3
-            )
+            hits = provider.search("https://video.example/watch?v=locked", limit=3)
     finally:
         FakeYoutubeDL.extract_info = original_extract
 
     assert hits == []
-    assert any("skip" in r.getMessage().lower() or "drm" in r.getMessage().lower()
-               for r in caplog.records)
+    assert any(
+        "skip" in r.getMessage().lower() or "drm" in r.getMessage().lower() for r in caplog.records
+    )
 
 
 def test_download_streams_bytes_and_cleans_up(tmp_path):

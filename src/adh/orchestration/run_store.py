@@ -79,9 +79,7 @@ class RunStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-TERMINAL_STATUSES = frozenset(
-    {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED}
-)
+TERMINAL_STATUSES = frozenset({RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED})
 
 
 @dataclass(frozen=True)
@@ -131,8 +129,11 @@ def utcnow_iso() -> str:
 def new_record(run_id: str, job_id: str) -> RunRecord:
     now = utcnow_iso()
     return RunRecord(
-        run_id=run_id, job_id=job_id, status=RunStatus.DISCOVERING,
-        created_at=now, updated_at=now,
+        run_id=run_id,
+        job_id=job_id,
+        status=RunStatus.DISCOVERING,
+        created_at=now,
+        updated_at=now,
     )
 
 

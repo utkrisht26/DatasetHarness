@@ -219,6 +219,7 @@ class CrawlRouter:
         if job.on_event:
             job.on_event("running", req.url, {"depth": req.depth})
         import time
+
         fetched_at = time.time()
         resp = await self._service.acrawl(req)
         resp = replace(resp, depth=req.depth, fetched_at=fetched_at)
@@ -238,11 +239,15 @@ class CrawlRouter:
         if final_key in job.seen_final:
             logger.debug("dropped redirect-duplicate of %s: %s", resp.final_url, req.url)
             if job.on_event:
-                job.on_event("pruned", req.url, {
-                    "reason": "redirect duplicate",
-                    "final_url": resp.final_url,
-                    "depth": req.depth
-                })
+                job.on_event(
+                    "pruned",
+                    req.url,
+                    {
+                        "reason": "redirect duplicate",
+                        "final_url": resp.final_url,
+                        "depth": req.depth,
+                    },
+                )
             return
         job.seen_final.add(final_key)
         job.seen.add(final_key)
@@ -255,35 +260,50 @@ class CrawlRouter:
                 None, job.policy.judge.score, job.policy.query, resp.markdown
             )
             if relevance < job.policy.content_threshold:
-                logger.debug("dropped off-topic page (%.2f<%.2f): %s",
-                             relevance, job.policy.content_threshold, req.url)
+                logger.debug(
+                    "dropped off-topic page (%.2f<%.2f): %s",
+                    relevance,
+                    job.policy.content_threshold,
+                    req.url,
+                )
                 if job.on_event:
-                    judge_name = "bm25" if "Bm25" in job.policy.judge.__class__.__name__ else "llm" if "Llm" in job.policy.judge.__class__.__name__ else "keep_all"
-                    job.on_event("dropped", req.url, {
-                        "judge": judge_name,
-                        "score": relevance,
-                        "threshold": job.policy.content_threshold,
-                        "depth": req.depth
-                    })
+                    judge_name = (
+                        "bm25"
+                        if "Bm25" in job.policy.judge.__class__.__name__
+                        else "llm"
+                        if "Llm" in job.policy.judge.__class__.__name__
+                        else "keep_all"
+                    )
+                    job.on_event(
+                        "dropped",
+                        req.url,
+                        {
+                            "judge": judge_name,
+                            "score": relevance,
+                            "threshold": job.policy.content_threshold,
+                            "depth": req.depth,
+                        },
+                    )
                 return  # drop the page and do not expand its links
         resp = replace(resp, relevance_score=relevance)
         if len(job.results) >= job.max_pages:  # a peer worker may have filled it
             return
         job.results.append(resp)
         if job.on_event:
-            job.on_event("kept", req.url, {
-                "score": relevance,
-                "depth": req.depth,
-                "license": resp.license_hint
-            })
+            job.on_event(
+                "kept",
+                req.url,
+                {"score": relevance, "depth": req.depth, "license": resp.license_hint},
+            )
         keep = job.on_result(resp) if job.on_result is not None else True
         if not keep:
             job.handle.cancelled = True  # saturation -> flush this job's frontier
             if job.on_event:
-                job.on_event("saturated", resp.final_url or resp.url, {
-                    "reason": "coverage saturated",
-                    "depth": req.depth
-                })
+                job.on_event(
+                    "saturated",
+                    resp.final_url or resp.url,
+                    {"reason": "coverage saturated", "depth": req.depth},
+                )
             return
         if req.depth < job.max_depth and len(job.results) < job.max_pages:
             self._enqueue_outlinks(job, req, resp)
@@ -302,22 +322,29 @@ class CrawlRouter:
                     if job.seed.allowed_locales:
                         import re
                         from urllib.parse import urlparse
+
                         segments = [s for s in urlparse(link.url).path.split("/") if s]
                         if segments:
                             lead = segments[0].lower()
-                            if re.match(r"^[a-z]{2}(-[a-z]{2,4})?$", lead) and lead not in [loc.lower() for loc in job.seed.allowed_locales]:
+                            if re.match(r"^[a-z]{2}(-[a-z]{2,4})?$", lead) and lead not in [
+                                loc.lower() for loc in job.seed.allowed_locales
+                            ]:
                                 reason = "locale filter"
                     job.on_event("pruned", link.url, {"reason": reason, "depth": parent.depth + 1})
                 continue
             score = policy.url_scorer.score(link.url, anchor=link.text)
             if score < policy.url_threshold:
                 if job.on_event:
-                    job.on_event("pruned", link.url, {
-                        "reason": "url scorer threshold",
-                        "score": score,
-                        "threshold": policy.url_threshold,
-                        "depth": parent.depth + 1
-                    })
+                    job.on_event(
+                        "pruned",
+                        link.url,
+                        {
+                            "reason": "url scorer threshold",
+                            "score": score,
+                            "threshold": policy.url_threshold,
+                            "depth": parent.depth + 1,
+                        },
+                    )
                 continue
             job.seen.add(key)
             job.frontier.put_nowait(

@@ -158,7 +158,9 @@ def plan_run(
     trip = CircuitBreaker(spec.limits).check(state.metrics)
     if trip is not None and trip.reason in ("max_llm_tokens", "max_cost_usd"):
         if plan.sources or plan.synthesis_aspects:
-            state.notes = list(state.notes) + [f"circuit breaker at discovery: {trip} — plan kept for review"]
+            state.notes = list(state.notes) + [
+                f"circuit breaker at discovery: {trip} — plan kept for review"
+            ]
             save_state(work, state)
             record = save_record(work, replace(record, status=RunStatus.AWAITING_APPROVAL))
             return PlannedRun(record=record, plan=plan, work_dir=work)
@@ -228,7 +230,9 @@ def resume_run(
     except Exception as exc:
         save_record(
             work,
-            replace(record, status=RunStatus.FAILED, exit_reason="acquisition_error", error=str(exc)),
+            replace(
+                record, status=RunStatus.FAILED, exit_reason="acquisition_error", error=str(exc)
+            ),
         )
         raise
 
@@ -238,13 +242,9 @@ def resume_run(
         terminal = RunStatus.CANCELLED  # operator cancel beats the outcome
     else:
         terminal = (
-            RunStatus.SUCCEEDED
-            if result.exit_reason in SUCCESS_EXIT_REASONS
-            else RunStatus.FAILED
+            RunStatus.SUCCEEDED if result.exit_reason in SUCCESS_EXIT_REASONS else RunStatus.FAILED
         )
-    save_record(
-        work, replace(current or record, status=terminal, exit_reason=result.exit_reason)
-    )
+    save_record(work, replace(current or record, status=terminal, exit_reason=result.exit_reason))
     return result
 
 
@@ -356,7 +356,9 @@ def _acquire(
             break
 
         elapsed = clock_seconds() - start
-        trip = breaker.check(metrics, storage_mb=_storage_mb(store, job_id), elapsed_seconds=elapsed)
+        trip = breaker.check(
+            metrics, storage_mb=_storage_mb(store, job_id), elapsed_seconds=elapsed
+        )
         if trip is not None:
             exit_reason = trip.reason
             notes.append(f"circuit breaker: {trip}")
@@ -397,7 +399,9 @@ def _acquire(
         save_state(work, state)
 
     # ---- 1.7 synthesis hand-offs ----
-    handoffs = handoffs_for(job_id, approved.synthesis_aspects) if decision.approve_synthesis else []
+    handoffs = (
+        handoffs_for(job_id, approved.synthesis_aspects) if decision.approve_synthesis else []
+    )
 
     # ---- exit reason ----
     if exit_reason is None:

@@ -83,8 +83,12 @@ def persona_grid(
     intents: tuple[str, ...] = HUB_INTENTS,
 ) -> tuple[str, ...]:
     """The deterministic persona-hub grid: role x expertise x intent cross-product."""
-    return tuple(f"{role}, {level}-level, motivated by {intent}"
-                 for role in roles for level in expertise for intent in intents)
+    return tuple(
+        f"{role}, {level}-level, motivated by {intent}"
+        for role in roles
+        for level in expertise
+        for intent in intents
+    )
 
 
 # ------------------------------------------------------------------ strategy port
@@ -329,18 +333,26 @@ class SeedEngine:
         for ch in chunks:
             aspect = by_aspect.get(ch.aspect_id)
             ctx = self._ctx_for_chunk(
-                job_id, ch, aspect, rng=random.Random(f"{seed_value}:{ch.aspect_id}:{_next_ordinal(ch.aspect_id)}")
+                job_id,
+                ch,
+                aspect,
+                rng=random.Random(f"{seed_value}:{ch.aspect_id}:{_next_ordinal(ch.aspect_id)}"),
             )
             units.setdefault(ch.aspect_id, []).extend(strategy.expand(ctx))
         for h in handoffs:
             ctx = self._ctx_for_handoff(
-                job_id, h, by_aspect, rng=random.Random(f"{seed_value}:{h.aspect_id}:{_next_ordinal(h.aspect_id)}")
+                job_id,
+                h,
+                by_aspect,
+                rng=random.Random(f"{seed_value}:{h.aspect_id}:{_next_ordinal(h.aspect_id)}"),
             )
             units.setdefault(h.aspect_id, []).extend(strategy.expand(ctx))
         for a in aspects:
             if a.aspect_id not in units:
                 ctx = self._ctx_for_aspect(
-                    job_id, a, rng=random.Random(f"{seed_value}:{a.aspect_id}:{_next_ordinal(a.aspect_id)}")
+                    job_id,
+                    a,
+                    rng=random.Random(f"{seed_value}:{a.aspect_id}:{_next_ordinal(a.aspect_id)}"),
                 )
                 units[a.aspect_id] = strategy.expand(ctx)
 

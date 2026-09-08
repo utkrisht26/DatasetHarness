@@ -60,11 +60,7 @@ def _grounding_text(seed: SeedPoint, store: CorpusStore | None) -> str:
 
 def _source_url(seed: SeedPoint) -> str | None:
     url = seed.source_url
-    return (
-        url
-        if isinstance(url, str) and url.startswith(("http://", "https://"))
-        else None
-    )
+    return url if isinstance(url, str) and url.startswith(("http://", "https://")) else None
 
 
 # --------------------------------------------------------------------- heuristic
@@ -100,9 +96,7 @@ class HeuristicGenerator:
                 source_sha256=seed.source_sha256,
                 derived_from=seed.derived_from,
                 model_id="heuristic:adh",
-                prompt_hash=sha256_prefixed(
-                    f"{seed.seed_id}:{seed.persona}:{seed.difficulty}"
-                ),
+                prompt_hash=sha256_prefixed(f"{seed.seed_id}:{seed.persona}:{seed.difficulty}"),
                 generation_params=dict(spec.generation_params),
                 pipeline_step="text-generation",
                 input_tokens=approx_token_count(input_text),
@@ -117,9 +111,7 @@ class HeuristicGenerator:
         import keyword
 
         kws = set(seed.keywords)
-        if spec.modality == "code" or (
-            {"code", "macro", "async", "rust", "python"} & kws
-        ):
+        if spec.modality == "code" or ({"code", "macro", "async", "rust", "python"} & kws):
             raw = re.sub(
                 r"[^a-z0-9_]",
                 "",
@@ -199,9 +191,7 @@ class LlmGenerator:
             # One bounded corrective re-ask: providers intermittently wrap or drop the
             # JSON despite the system prompt (b6b176e6 lost ~a third of its calls this
             # way). Still unparseable -> return empty and let routing escalate.
-            payload, delta_re = self._reask(
-                sys=sys, human=human, prior=text, gen_params=gen_params
-            )
+            payload, delta_re = self._reask(sys=sys, human=human, prior=text, gen_params=gen_params)
             if delta is not None and delta_re is not None:
                 delta = delta + delta_re
         if payload is None:
@@ -238,9 +228,7 @@ class LlmGenerator:
                 generation_params=dict(spec.generation_params),
                 pipeline_step="text-generation",
                 input_tokens=delta.input_tokens if delta else approx_token_count(human),
-                output_tokens=(
-                    delta.output_tokens if delta else approx_token_count(output_text)
-                ),
+                output_tokens=(delta.output_tokens if delta else approx_token_count(output_text)),
                 language=spec.languages[0] if spec.languages else "en",
                 task_category=_task_category(spec),
                 cost_usd=(delta.cost_usd or 0.0) if delta else 0.0,
@@ -274,8 +262,7 @@ def _text(response) -> str:
     content = getattr(response, "content", response)
     if isinstance(content, list):  # some providers return content blocks
         return "".join(
-            part.get("text", "") if isinstance(part, dict) else str(part)
-            for part in content
+            part.get("text", "") if isinstance(part, dict) else str(part) for part in content
         )
     return str(content)
 
@@ -332,9 +319,7 @@ def build_generator(spec: JobSpec, *, usage: UsageTracker | None = None) -> Gene
     try:
         tiers = routed_from_models(models, usage=usage)
         tiers[0]()  # probe: missing extra / bad id fails here, not mid-run
-    except (
-        Exception
-    ) as exc:  # noqa: BLE001 - no extra / no key -> deterministic fallback
+    except Exception as exc:  # noqa: BLE001 - no extra / no key -> deterministic fallback
         logger.warning("LlmGenerator unavailable (%s); using HeuristicGenerator", exc)
         return HeuristicGenerator()
     return RoutedGenerator(tiers=tiers)

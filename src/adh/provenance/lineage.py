@@ -87,9 +87,7 @@ def build_lineage(
             "job_id": ch.job_id,
             "wasGeneratedBy": activity_id,
             "wasAttributedTo": agent_id,
-            "wasDerivedFrom": (
-                [source_entity_id] if source_entity_id else list(ch.derived_from)
-            ),
+            "wasDerivedFrom": ([source_entity_id] if source_entity_id else list(ch.derived_from)),
             "content_uri": ch.content_uri,
             "source_channel": ch.source_channel.value,
             "n_tokens": ch.n_tokens,

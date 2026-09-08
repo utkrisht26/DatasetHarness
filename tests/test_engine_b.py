@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 
 
-
 from adh.contract import JobSpec
 from adh.generation import HeuristicGenerator
 from adh.orchestration import run_engine_a, run_engine_b

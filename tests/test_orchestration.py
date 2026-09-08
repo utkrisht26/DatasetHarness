@@ -206,7 +206,9 @@ def test_engine_a_synthesis_only(minimal_spec_dict, tmp_path):
     agent = SourceDiscoveryAgent(
         registry=InMemoryDatasetRegistry(), search=InMemorySearchProvider()
     )
-    result = run_engine_a(spec, work_dir=tmp_path, agent=agent, channels={}, approver=AutoApprover())
+    result = run_engine_a(
+        spec, work_dir=tmp_path, agent=agent, channels={}, approver=AutoApprover()
+    )
     assert result.n_chunks == 0
     assert result.n_handoffs >= 1
     assert result.exit_reason == "completed"
@@ -216,7 +218,9 @@ def test_engine_a_resume_skips_completed(minimal_spec_dict, tmp_path):
     spec = _mixed_spec(minimal_spec_dict)
     agent = _mixed_agent()
     channels = _mixed_channels()
-    first = run_engine_a(spec, work_dir=tmp_path, agent=agent, channels=channels, approver=AutoApprover())
+    first = run_engine_a(
+        spec, work_dir=tmp_path, agent=agent, channels=channels, approver=AutoApprover()
+    )
     n_first = first.n_chunks
     completed = load_state(tmp_path, spec.name).completed_source_ids
     assert completed  # state persisted
@@ -234,7 +238,9 @@ def test_engine_a_resume_skips_completed(minimal_spec_dict, tmp_path):
         SourceChannel.DATASETS: DatasetsChannel(loader=_ExplodingLoader()),
         SourceChannel.WEB: WebChannel(fetcher=_ExplodingFetcher()),
     }
-    second = run_engine_a(spec, work_dir=tmp_path, agent=agent, channels=boom, approver=AutoApprover())
+    second = run_engine_a(
+        spec, work_dir=tmp_path, agent=agent, channels=boom, approver=AutoApprover()
+    )
     # Resumed: prior chunks reloaded from manifest, nothing refetched.
     assert second.n_chunks == n_first
     assert second.exit_reason == "completed"
@@ -263,7 +269,9 @@ def test_engine_a_saturation_skips_remaining_web(minimal_spec_dict, tmp_path):
     )
     agent = SourceDiscoveryAgent(registry=InMemoryDatasetRegistry(), search=search)
     channels = {SourceChannel.WEB: WebChannel(fetcher=InMemoryContentFetcher(pages=pages))}
-    result = run_engine_a(spec, work_dir=tmp_path, agent=agent, channels=channels, approver=AutoApprover())
+    result = run_engine_a(
+        spec, work_dir=tmp_path, agent=agent, channels=channels, approver=AutoApprover()
+    )
     # identical content is also content-addressed to one blob, but saturation should
     # have stopped fetching after warm-up; assert a saturation note fired.
     assert any("saturated" in n for n in result.notes)

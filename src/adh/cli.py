@@ -56,26 +56,20 @@ def _interactive_decision(plan) -> ApprovalDecision:
         ids = frozenset(s.source_id for s in plan.sources)
         return ApprovalDecision(ids, approve_synthesis=True, reason="interactive: all")
     if raw in ("n", "none"):
-        return ApprovalDecision(
-            frozenset(), approve_synthesis=False, reason="interactive: none"
-        )
+        return ApprovalDecision(frozenset(), approve_synthesis=False, reason="interactive: none")
     chosen = set()
     for tok in raw.replace(" ", "").split(","):
         if tok.isdigit():
             i = int(tok) - 1
             if 0 <= i < len(plan.sources):
                 chosen.add(plan.sources[i].source_id)
-    return ApprovalDecision(
-        frozenset(chosen), approve_synthesis=True, reason="interactive: subset"
-    )
+    return ApprovalDecision(frozenset(chosen), approve_synthesis=True, reason="interactive: subset")
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
     spec = load_job_spec(args.spec)
     report = check_job_spec(spec, base_dir=Path(args.spec).resolve().parent.parent)
-    print(
-        f"Job spec {spec.name!r}: structural validation OK (tier {int(spec.verifiability_tier)})"
-    )
+    print(f"Job spec {spec.name!r}: structural validation OK (tier {int(spec.verifiability_tier)})")
     for w in report.warnings:
         print(f"  warning: {w}")
     for e in report.errors:
@@ -88,11 +82,7 @@ def _cmd_validate(args: argparse.Namespace) -> int:
 
 def _discovery_model_from_args(args: argparse.Namespace) -> str | None:
     """The configured discovery model id, or None for heuristic-only discovery."""
-    return (
-        None
-        if getattr(args, "no_llm", False)
-        else getattr(args, "discovery_model", None)
-    )
+    return None if getattr(args, "no_llm", False) else getattr(args, "discovery_model", None)
 
 
 def _cmd_discover(args: argparse.Namespace) -> int:
@@ -162,9 +152,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
     # record_schema_ref / decontaminate_against in the spec resolve against the repo
     # root (the spec lives in e.g. examples/), same base check_job_spec uses.
     base_dir = Path(args.spec).resolve().parent.parent
-    result = run_engine_b(
-        spec, work_dir=work_dir, resume=not args.fresh, schema_base_dir=base_dir
-    )
+    result = run_engine_b(spec, work_dir=work_dir, resume=not args.fresh, schema_base_dir=base_dir)
     c = result.counts
     print(f"\nEngine B finished: exit_reason={result.exit_reason!r}")
     print(
@@ -181,9 +169,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
     if result.docs:
         print(f"  docs:         {', '.join(p.name for p in result.docs)}")
     if result.coverage.thin_aspects:
-        print(
-            f"  thin aspects (re-discover candidates): {list(result.coverage.thin_aspects)}"
-        )
+        print(f"  thin aspects (re-discover candidates): {list(result.coverage.thin_aspects)}")
     return 0
 
 
@@ -423,12 +409,8 @@ def _cmd_loop(args: argparse.Namespace) -> int:
 
     r = outcome.result
     c = r.counts
-    print(
-        f"\nCoverage loop finished: exit_reason={outcome.exit_reason!r} rounds={outcome.rounds}"
-    )
-    print(
-        f"  records:      {r.n_records}  (accept rate {c.get('accept_rate', 0.0):.1%})"
-    )
+    print(f"\nCoverage loop finished: exit_reason={outcome.exit_reason!r} rounds={outcome.rounds}")
+    print(f"  records:      {r.n_records}  (accept rate {c.get('accept_rate', 0.0):.1%})")
     print(f"  thin aspects: {list(outcome.thin_aspects) or 'none'}")
     if outcome.acquisitions:
         print(f"  acquisitions: {[a.exit_reason for a in outcome.acquisitions]}")
@@ -471,18 +453,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_run = sub.add_parser("run", parents=[common], help="run Engine A end-to-end")
     p_run.add_argument("spec")
-    p_run.add_argument(
-        "--work-dir", default=None, help="output directory (default ./runs/<job>)"
-    )
-    p_run.add_argument(
-        "--yes", action="store_true", help="approve all discovered sources"
-    )
-    p_run.add_argument(
-        "--autonomous", action="store_true", help="run without the approval gate"
-    )
-    p_run.add_argument(
-        "--fresh", action="store_true", help="ignore prior state (no resume)"
-    )
+    p_run.add_argument("--work-dir", default=None, help="output directory (default ./runs/<job>)")
+    p_run.add_argument("--yes", action="store_true", help="approve all discovered sources")
+    p_run.add_argument("--autonomous", action="store_true", help="run without the approval gate")
+    p_run.add_argument("--fresh", action="store_true", help="ignore prior state (no resume)")
     p_run.add_argument(
         "--discovery-model",
         default=DEFAULT_CHAT_MODEL,
@@ -529,12 +503,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=2,
         help="re-discovery round budget after the initial build (default 2)",
     )
-    p_loop.add_argument(
-        "--yes", action="store_true", help="approve re-discovered sources"
-    )
-    p_loop.add_argument(
-        "--autonomous", action="store_true", help="run without the approval gate"
-    )
+    p_loop.add_argument("--yes", action="store_true", help="approve re-discovered sources")
+    p_loop.add_argument("--autonomous", action="store_true", help="run without the approval gate")
     # no --fresh here on purpose: the loop always resumes durable state (that
     # continuity is its whole point); use `adh run --fresh` to restart Engine A.
     p_loop.add_argument(
@@ -560,9 +530,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="the run dir holding dataset/ (default ./runs/<job>)",
     )
-    p_pub.add_argument(
-        "--repo-id", required=True, help="target Hub dataset id (org/name)"
-    )
+    p_pub.add_argument("--repo-id", required=True, help="target Hub dataset id (org/name)")
     p_pub.add_argument(
         "--public",
         action="store_true",
@@ -595,9 +563,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8000)
-    p_serve.add_argument(
-        "--runs-dir", default="./runs", help="base directory for run dirs"
-    )
+    p_serve.add_argument("--runs-dir", default="./runs", help="base directory for run dirs")
     p_serve.add_argument(
         "--allow-unauthenticated",
         action="store_true",

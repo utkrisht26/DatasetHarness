@@ -99,9 +99,7 @@ def test_plan_run_surfaced_cost_over_budget_parks_usable_plan(minimal_spec_dict,
     planned = plan_run(spec, work_dir=tmp_path, agent=_mixed_agent(), usage=usage)
     assert planned.awaiting_approval  # usable plan kept for review, breaker noted
     assert planned.plan.sources
-    assert any(
-        "circuit breaker at discovery" in n for n in load_state(tmp_path, spec.name).notes
-    )
+    assert any("circuit breaker at discovery" in n for n in load_state(tmp_path, spec.name).notes)
 
 
 def test_plan_run_pages_cap_does_not_fail_discovery(minimal_spec_dict, tmp_path):
@@ -124,9 +122,7 @@ def test_resume_run_without_plan_raises(tmp_path):
 def test_resume_run_applies_a_subset_decision(minimal_spec_dict, tmp_path):
     spec = _mixed_spec(minimal_spec_dict)
     planned = plan_run(spec, work_dir=tmp_path, agent=_mixed_agent())
-    web_ids = frozenset(
-        s.source_id for s in planned.plan.sources if s.channel.value == "web"
-    )
+    web_ids = frozenset(s.source_id for s in planned.plan.sources if s.channel.value == "web")
     assert web_ids and len(web_ids) < len(planned.plan.sources)
 
     result = resume_run(

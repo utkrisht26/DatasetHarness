@@ -179,9 +179,7 @@ class FetchPlan:
         return cls(
             job_id=data["job_id"],
             sources=tuple(RankedSource.from_dict(s) for s in data.get("sources", [])),
-            synthesis_aspects=tuple(
-                Aspect.from_dict(a) for a in data.get("synthesis_aspects", [])
-            ),
+            synthesis_aspects=tuple(Aspect.from_dict(a) for a in data.get("synthesis_aspects", [])),
             aspects=tuple(Aspect.from_dict(a) for a in data.get("aspects", [])),
             notes=list(data.get("notes", [])),
         )

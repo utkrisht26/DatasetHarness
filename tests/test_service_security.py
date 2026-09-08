@@ -48,15 +48,11 @@ def test_bearer_token_protects_api_but_not_liveness() -> None:
         assert missing.headers["www-authenticate"] == "Bearer"
         assert client.get("/api/crawl/jobs").status_code == 401
         assert (
-            client.get(
-                "/api/runs", headers={"Authorization": "Bearer wrong-secret"}
-            ).status_code
+            client.get("/api/runs", headers={"Authorization": "Bearer wrong-secret"}).status_code
             == 401
         )
 
-        authorized = client.get(
-            "/api/runs", headers={"Authorization": "Bearer test-secret"}
-        )
+        authorized = client.get("/api/runs", headers={"Authorization": "Bearer test-secret"})
         assert authorized.status_code == 200
         assert authorized.json() == []
 
@@ -98,9 +94,7 @@ def test_loopback_host_detection_is_conservative() -> None:
     assert not is_loopback_host("service.internal")
 
 
-def test_cli_refuses_unauthenticated_non_loopback_bind(
-    monkeypatch, tmp_path, capsys
-) -> None:
+def test_cli_refuses_unauthenticated_non_loopback_bind(monkeypatch, tmp_path, capsys) -> None:
     monkeypatch.delenv(API_KEY_ENV, raising=False)
     args = Namespace(
         host="0.0.0.0",

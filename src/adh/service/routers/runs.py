@@ -120,8 +120,7 @@ class RunsService:
             raise FileNotFoundError(f"run {run_id!r} has no saved spec to restart from")
         fresh_spec = saved if spec_override is None else spec_override
         note = (
-            "restarted from run "
-            f"{run_id!r} (same spec)"
+            f"restarted from run {run_id!r} (same spec)"
             if fresh_spec == saved
             else f"restarted from run {run_id!r} with edited config"
         )
@@ -219,9 +218,7 @@ class RunsService:
             # inside the try: a raising agent factory (bad key, provider down) must
             # land the run FAILED rather than hang it in DISCOVERING forever
             agent = self._agent_factory(usage)
-            planned = plan_run(
-                spec, work_dir=self.store.run_dir(run_id), agent=agent, usage=usage
-            )
+            planned = plan_run(spec, work_dir=self.store.run_dir(run_id), agent=agent, usage=usage)
         except Exception as exc:  # noqa: BLE001 - a failed run must not kill the worker
             logger.exception(
                 "run %s: discovery failed after %d token(s)", run_id, usage.total.total_tokens
@@ -500,9 +497,7 @@ def build_runs_router(runs: RunsService) -> APIRouter:
             approved = set(body.approved_source_ids)
             unknown = sorted(approved - plan_ids)
             if unknown:
-                raise HTTPException(
-                    status_code=422, detail=f"unknown source ids: {unknown}"
-                )
+                raise HTTPException(status_code=422, detail=f"unknown source ids: {unknown}")
         decision = ApprovalDecision(
             approved_source_ids=frozenset(approved),
             approve_synthesis=body.approve_synthesis,

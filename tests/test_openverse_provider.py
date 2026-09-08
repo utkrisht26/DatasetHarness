@@ -87,7 +87,9 @@ class _FakeStream:
             yield body[i : i + chunk_size]
 
 
-def _provider(payload: dict | None = None, **over) -> tuple[OpenverseImageProvider, FakeOpenverseClient]:
+def _provider(
+    payload: dict | None = None, **over
+) -> tuple[OpenverseImageProvider, FakeOpenverseClient]:
     client = FakeOpenverseClient(payload or _payload([]))
     kwargs = {"api_key": None, "client_factory": lambda key: client, **over}
     provider = OpenverseImageProvider(**kwargs)
@@ -126,11 +128,13 @@ def test_composed_license_is_compatible_with_canonical_cc_output():
 
 def test_bare_and_public_domain_forms_compose():
     provider, _ = _provider(
-        _payload([
-            _item(id="bare", license="by", license_version=""),
-            _item(id="pdm", license="pdm", license_version=""),
-            _item(id="cc0", license="cc0", license_version="1.0"),
-        ])
+        _payload(
+            [
+                _item(id="bare", license="by", license_version=""),
+                _item(id="pdm", license="pdm", license_version=""),
+                _item(id="cc0", license="cc0", license_version="1.0"),
+            ]
+        )
     )
 
     hits = {h.media_id: h.license for h in provider.search("q", limit=5)}
@@ -180,11 +184,13 @@ def test_page_size_caps_at_20_with_loud_truncation_note(caplog):
 
 
 def test_malformed_items_are_tolerated(caplog):
-    payload = _payload([
-        _item(),
-        {"id": "broken"},  # no url at all
-        _item(id="fine2"),
-    ])
+    payload = _payload(
+        [
+            _item(),
+            {"id": "broken"},  # no url at all
+            _item(id="fine2"),
+        ]
+    )
     provider, _ = _provider(payload)
 
     with caplog.at_level(logging.WARNING):

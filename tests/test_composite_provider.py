@@ -47,9 +47,7 @@ def test_supported_types_are_the_union():
 
 
 def test_fans_out_and_merges_hits_in_provider_order():
-    comp = CompositeMediaProvider(
-        [_provider(_hit(mid="v1")), _provider(_hit(mid="v2"))]
-    )
+    comp = CompositeMediaProvider([_provider(_hit(mid="v1")), _provider(_hit(mid="v2"))])
 
     hits = comp.search("asset", limit=10)
 
@@ -66,8 +64,10 @@ def test_skips_providers_without_a_wanted_capability():
 
     comp = CompositeMediaProvider(
         [
-            Spy(hits=[_hit(mid="img", media_type="image")],
-                supported_media_types=frozenset({"image"})),
+            Spy(
+                hits=[_hit(mid="img", media_type="image")],
+                supported_media_types=frozenset({"image"}),
+            ),
             Spy(hits=[_hit(mid="vid")], supported_media_types=frozenset({"video"})),
         ]
     )
@@ -154,9 +154,9 @@ def test_one_broken_backend_is_loud_not_fatal(caplog):
     healthy = _provider(_hit(mid="ok"))
 
     with caplog.at_level(logging.WARNING):
-        hits = CompositeMediaProvider([Boom(hits=[], supported_media_types={"video"}), healthy]).search(
-            "asset", limit=10
-        )
+        hits = CompositeMediaProvider(
+            [Boom(hits=[], supported_media_types={"video"}), healthy]
+        ).search("asset", limit=10)
 
     assert [h.media_id for h in hits] == ["ok"]
     assert any("serp exploded" in r.getMessage() for r in caplog.records)

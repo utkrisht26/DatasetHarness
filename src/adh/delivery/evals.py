@@ -155,9 +155,7 @@ def assert_publishable(
     """Gate publishing: raise :class:`NotPublishableError` listing every reason not to."""
     reasons: list[str] = []
     if report.total_records < min_records:
-        reasons.append(
-            f"records {report.total_records} < required minimum {min_records}"
-        )
+        reasons.append(f"records {report.total_records} < required minimum {min_records}")
     if report.contamination_residual_count > max_contamination:
         reasons.append(
             f"contamination residuals {report.contamination_residual_count} > allowed "
@@ -514,9 +512,7 @@ class EmbeddingLiftProbe:
         if not any(len(idxs) >= 2 for idxs in grouped.values()):
             return 0.0  # need >=2 texts per aspect for within-aspect pairs
         vectors = model.encode(texts, batch_size=self.batch_size, convert_to_numpy=True)
-        by_group = {
-            g: [vectors[i] for i in idxs] for g, idxs in grouped.items() if len(idxs) >= 2
-        }
+        by_group = {g: [vectors[i] for i in idxs] for g, idxs in grouped.items() if len(idxs) >= 2}
         return cosine_separation(by_group, pairs_per_group=self.pairs_per_group, seed=seed)
 
     def _ensure_model(self) -> Any:

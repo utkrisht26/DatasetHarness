@@ -101,7 +101,9 @@ class ReportSource(BaseModel):
     descriptions below ship to the model as the structured-output schema.
     """
 
-    channel: str = Field("web", description="'web' (page to crawl) or 'datasets' (existing dataset)")
+    channel: str = Field(
+        "web", description="'web' (page to crawl) or 'datasets' (existing dataset)"
+    )
     locator: str = Field(
         description=(
             "For web: the seed URL the crawler starts from (prefer hub/index pages). "
@@ -177,6 +179,7 @@ def build_discovery_tools(
         abs_path = abs_dir / filename
 
         import json
+
         with open(abs_path, "w", encoding="utf-8") as f:
             json.dump({"query": query, "results": results}, f, indent=2)
 
@@ -209,6 +212,7 @@ def build_discovery_tools(
         abs_path = abs_dir / filename
 
         import json
+
         with open(abs_path, "w", encoding="utf-8") as f:
             json.dump({"query": query, "results": results}, f, indent=2)
 
@@ -344,9 +348,7 @@ def _build_tracer(tracker: UsageTracker | None, budget: int | None = None):
                     )
                     delta += usage.total_tokens
             total = tracker.total.total_tokens if tracker is not None else delta
-            logger.info(
-                "deep-agent · model turn %d (+%d tok, %d total)", self.turns, delta, total
-            )
+            logger.info("deep-agent · model turn %d (+%d tok, %d total)", self.turns, delta, total)
             if budget is not None and tracker is not None and total >= budget:
                 raise DiscoveryBudgetExceeded(
                     f"discovery token budget exhausted: {total}/{budget} tokens used"
@@ -569,7 +571,9 @@ class DeepAgentDiscoveryAgent:
             for i in report.synthesis_aspect_indexes:
                 if 0 <= i < len(aspects):
                     synthesis.append(aspects[i])
-                    notes.append(f"aspect {aspects[i].aspect_id!r} routed to synthesis (model-known)")
+                    notes.append(
+                        f"aspect {aspects[i].aspect_id!r} routed to synthesis (model-known)"
+                    )
 
         ranked: list[RankedSource] = []
         for src in report.sources:

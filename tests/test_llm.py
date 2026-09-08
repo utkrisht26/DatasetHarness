@@ -131,7 +131,9 @@ def test_token_usage_from_message_handles_missing():
 def test_usage_tracker_accumulates():
     tracker = UsageTracker()
     tracker.add(TokenUsage(10, 2))
-    delta = tracker.add_message(SimpleNamespace(usage_metadata={"input_tokens": 5, "output_tokens": 1}))
+    delta = tracker.add_message(
+        SimpleNamespace(usage_metadata={"input_tokens": 5, "output_tokens": 1})
+    )
     assert delta.total_tokens == 6
     assert tracker.calls == 2
     assert tracker.total.total_tokens == 18

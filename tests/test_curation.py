@@ -12,7 +12,14 @@ from adh.contract import (
     VerifiabilityTier,
     load_record_schema,
 )
-from adh.curation import Decontaminator, Deduper, assign_split, build_record, dead_letter_row, dedupe
+from adh.curation import (
+    Decontaminator,
+    Deduper,
+    assign_split,
+    build_record,
+    dead_letter_row,
+    dedupe,
+)
 from adh.curation.dedup import DedupAssignment
 from adh.generation import Candidate
 from adh.verification import Verdict
@@ -97,7 +104,11 @@ def test_cluster_per_split_never_spans_splits_and_counts_line_up():
         assert assign.cluster_id.startswith(f"{split}:")
     # counts consistent with clustering each split independently
     expected_dups = sum(
-        sum(1 for x in Deduper(method="exact").cluster([t for s, t in items if s == sp]) if x.is_duplicate)
+        sum(
+            1
+            for x in Deduper(method="exact").cluster([t for s, t in items if s == sp])
+            if x.is_duplicate
+        )
         for sp in set(splits)
     )
     assert sum(1 for a in out if a.is_duplicate) == expected_dups
@@ -113,7 +124,9 @@ def test_deduper_public_api_backward_compatible():
 # --------------------------------------------------------------------- decontam
 def test_decontaminator_flags_overlap(tmp_path):
     held = tmp_path / "heldout.jsonl"
-    held.write_text('{"input": "what is the capital of france", "output": "paris"}\n', encoding="utf-8")
+    held.write_text(
+        '{"input": "what is the capital of france", "output": "paris"}\n', encoding="utf-8"
+    )
     d = Decontaminator.from_paths([str(held)], ngram=4)
     assert d.active
     assert d.is_contaminated("tell me what is the capital of france please") is True
@@ -188,7 +201,14 @@ def test_build_record_rejects_contract_violation_via_dead_letter():
     verdict = Verdict(True, "jury", judge_scores={"overall": 4.0}, judge_models=("m1",))
     bad = _candidate(tier=2, output="")  # violates minLength:1 on output
     with pytest.raises(RecordValidationError) as ei:
-        build_record(bad, spec=_spec(), schema=schema, verdict=verdict, dedup=DedupAssignment("c", False), contaminated=False)
+        build_record(
+            bad,
+            spec=_spec(),
+            schema=schema,
+            verdict=verdict,
+            dedup=DedupAssignment("c", False),
+            contaminated=False,
+        )
     row = dead_letter_row(bad, ei.value)
     assert row["candidate_id"] == "job:a1:abcdef123456" and row["error"]
 
@@ -236,7 +256,10 @@ def test_curate_clusters_within_splits_end_to_end():
     # same threshold the sibling Deduper tests use: this pair's jaccard sits
     # between 0.6 and the 0.8 contract default (a mid-text swap breaks 5 of 9
     # five-gram shingles)
-    spec = _spec(pii_policy="allow", dedup_policy={"scope": "per-shard", "method": "minhash", "ngram": 5, "jaccard": 0.6})
+    spec = _spec(
+        pii_policy="allow",
+        dedup_policy={"scope": "per-shard", "method": "minhash", "ngram": 5, "jaccard": 0.6},
+    )
     verdict = Verdict(True, "jury", judge_scores={"overall": 4.0}, judge_models=("m1", "m2"))
     kept = [
         (_candidate(candidate_id=_id_in_split("t", "train", splits), output=a), verdict),
@@ -244,9 +267,7 @@ def test_curate_clusters_within_splits_end_to_end():
         (_candidate(candidate_id=_id_in_split("x", "test", splits), output=a), verdict),
     ]
 
-    records, _aspects, dead, dups, pii = _curate(
-        kept, spec=spec, schema=None, schema_base_dir=None
-    )
+    records, _aspects, dead, dups, pii = _curate(kept, spec=spec, schema=None, schema_base_dir=None)
 
     assert dead == [] and pii == {"pii_dropped": 0, "pii_redacted": 0}
     assert dups == 1  # the train near-dup; the identical test copy is its shard's representative

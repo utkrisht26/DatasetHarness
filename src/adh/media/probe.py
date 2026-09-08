@@ -60,7 +60,9 @@ def _sniff(head: bytes) -> str | None:
 
 
 # --------------------------------------------------------------------- mp4/mov
-def _iter_boxes(buf: bytes, start: int = 0, end: int | None = None) -> Iterator[tuple[bytes, tuple[int, int]]]:
+def _iter_boxes(
+    buf: bytes, start: int = 0, end: int | None = None
+) -> Iterator[tuple[bytes, tuple[int, int]]]:
     """Yield ``(type, payload_span)`` for each sibling box in ``buf[start:end]``."""
     end = len(buf) if end is None else end
     pos = start
@@ -144,9 +146,7 @@ def probe_mp4(path: str | Path) -> MediaProbeResult:
             pos += size
 
     if duration is None:
-        raise MediaProbeError(
-            f"{Path(path).name}: no readable moov/mvhd (fragmented or corrupt?)"
-        )
+        raise MediaProbeError(f"{Path(path).name}: no readable moov/mvhd (fragmented or corrupt?)")
     return MediaProbeResult(
         duration_s=duration,
         width=width or None,
@@ -156,7 +156,9 @@ def probe_mp4(path: str | Path) -> MediaProbeResult:
 
 
 # ------------------------------------------------------------------------ jpeg
-_SOF_MARKERS = frozenset({0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF})
+_SOF_MARKERS = frozenset(
+    {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
+)
 _PAYLOADLESS_MARKERS = frozenset({0x01, *range(0xD0, 0xDA)})  # TEM + RSTn + SOI/EOI
 
 
@@ -358,6 +360,5 @@ def probe_media(path: str | Path) -> MediaProbeResult:
     if kind == "video" or p.suffix.lower() in _MP4_SUFFIXES:
         return probe_mp4(p)
     raise MediaProbeError(
-        f"{p.name}: unrecognized media (magic {head[:12].hex()!r}), "
-        f"extension {p.suffix!r}"
+        f"{p.name}: unrecognized media (magic {head[:12].hex()!r}), extension {p.suffix!r}"
     )

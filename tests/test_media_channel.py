@@ -101,8 +101,13 @@ def _source(locator: str = "couple dancing", aspect: str = "a0") -> RankedSource
     return RankedSource(
         candidate=cand,
         evaluation=SourceEvaluation(
-            source_id=cand.source_id, shape_match=1.0, quality=1.0,
-            license_ok=True, freshness_ok=True, estimated_yield=1, score=1.0,
+            source_id=cand.source_id,
+            shape_match=1.0,
+            quality=1.0,
+            license_ok=True,
+            freshness_ok=True,
+            estimated_yield=1,
+            score=1.0,
         ),
     )
 
@@ -128,8 +133,13 @@ def _fetch(tmp_path: Path, hits: list[MediaHit], spec: JobSpec, governor=None):
 def test_fetch_stages_clips_as_content_addressed_chunks(tmp_path):
     hits = [
         _hit(media_id="1", title="Beach dance", tags=("sunset",)),
-        _hit(media_id="2", title="Studio spin", tags=("studio",), duration_s=4.0,
-             content=b"\x00\x00\x00\x18ftypisom(different-clip-bytes)"),
+        _hit(
+            media_id="2",
+            title="Studio spin",
+            tags=("studio",),
+            duration_s=4.0,
+            content=b"\x00\x00\x00\x18ftypisom(different-clip-bytes)",
+        ),
     ]
     spec = _spec(job_id="job")
 
@@ -215,9 +225,7 @@ def test_governor_saturation_flushes_the_frontier(tmp_path):
     spec = _spec(job_id="job")
     governor = RecordingGovernor(stop_after=1)
 
-    chunks = _fetch(
-        tmp_path, [_hit(media_id=str(i)) for i in range(4)], spec, governor=governor
-    )
+    chunks = _fetch(tmp_path, [_hit(media_id=str(i)) for i in range(4)], spec, governor=governor)
 
     assert len(chunks) == 1
     assert len(governor.observed) == 1
@@ -263,13 +271,22 @@ def test_locator_prefixes_strip_to_the_query(tmp_path):
 # ------------------------------------------------------------- corpus manifest
 def test_corpus_chunk_media_fields_round_trip_through_manifest():
     chunk = CorpusChunk(
-        chunk_id="job:a0:abc", job_id="job", aspect_id="a0",
+        chunk_id="job:a0:abc",
+        job_id="job",
+        aspect_id="a0",
         source_channel=SourceChannel.MEDIA,
-        source_url="https://www.pexels.com/video/1/", source_license="pexels",
-        source_sha256="a" * 64, content_uri="/tmp/x.mp4",
-        text_preview="preview", n_tokens=3,
+        source_url="https://www.pexels.com/video/1/",
+        source_license="pexels",
+        source_sha256="a" * 64,
+        content_uri="/tmp/x.mp4",
+        text_preview="preview",
+        n_tokens=3,
         fetched_at=datetime.now(timezone.utc),
-        media_format="mp4", duration_s=6.0, width=1080, height=1920, n_bytes=2048,
+        media_format="mp4",
+        duration_s=6.0,
+        width=1080,
+        height=1920,
+        n_bytes=2048,
     )
 
     row = chunk.to_manifest_row()
@@ -277,7 +294,10 @@ def test_corpus_chunk_media_fields_round_trip_through_manifest():
 
     assert restored.media_format == "mp4"
     assert (restored.duration_s, restored.width, restored.height, restored.n_bytes) == (
-        6.0, 1080, 1920, 2048,
+        6.0,
+        1080,
+        1920,
+        2048,
     )
     legacy = dict(row)
     del legacy["duration_s"]
@@ -335,9 +355,11 @@ def test_video_spec_without_provider_reports_loud_gap(tmp_path):
 def test_fixed_plan_routes_seed_prefixes_by_channel():
     spec = _spec(
         name="mixed",
-        discovery={"channels": ["media", "datasets", "web"], "mode": "fixed",
-                   "seeds": ["pexels://couple dancing", "hf://u/dset",
-                             "https://example.com/page"]},
+        discovery={
+            "channels": ["media", "datasets", "web"],
+            "mode": "fixed",
+            "seeds": ["pexels://couple dancing", "hf://u/dset", "https://example.com/page"],
+        },
     )
 
     plan = fixed_plan(spec, "job", notes=[])
@@ -375,11 +397,29 @@ def _image_hit(**over):
 
 def _image_spec(**over):
     data = {
-        **{k: v for k, v in _spec(job_id="job").model_dump().items()
-           if k in {"name", "description", "motivation", "intended_uses", "verifiability_tier",
-                    "task_categories", "languages", "target_size", "record_schema_ref",
-                    "allowed_licenses", "output_license", "generator_models", "judge_config",
-                    "splits", "delivery_layout", "limits"}},
+        **{
+            k: v
+            for k, v in _spec(job_id="job").model_dump().items()
+            if k
+            in {
+                "name",
+                "description",
+                "motivation",
+                "intended_uses",
+                "verifiability_tier",
+                "task_categories",
+                "languages",
+                "target_size",
+                "record_schema_ref",
+                "allowed_licenses",
+                "output_license",
+                "generator_models",
+                "judge_config",
+                "splits",
+                "delivery_layout",
+                "limits",
+            }
+        },
         "name": "mountain-images",
         "description": "landscape image triplets",
         "motivation": "train image captioning",

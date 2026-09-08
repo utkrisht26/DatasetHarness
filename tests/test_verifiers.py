@@ -141,14 +141,10 @@ def test_timeout_kills_the_whole_process_group():
     assert result.passed is False and "timed out" in (result.detail or "")
 
     deadline = _time.monotonic() + 5
-    probe = _subprocess.run(
-        ["pgrep", "-f", "adh-orphan-probe"], capture_output=True, text=True
-    )
+    probe = _subprocess.run(["pgrep", "-f", "adh-orphan-probe"], capture_output=True, text=True)
     while probe.returncode == 0 and _time.monotonic() < deadline:
         _time.sleep(0.2)
-        probe = _subprocess.run(
-            ["pgrep", "-f", "adh-orphan-probe"], capture_output=True, text=True
-        )
+        probe = _subprocess.run(["pgrep", "-f", "adh-orphan-probe"], capture_output=True, text=True)
     assert probe.returncode != 0, "grandchild survived the timeout kill"
 
 
@@ -182,9 +178,7 @@ def test_extract_answer_prefers_boxed():
 # --------------------------------------------------------------------- schema
 def test_schema_valid_json_matches():
     schema = {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}}
-    result = validate_json(
-        VerifierRequest(input="", output='{"name": "ada"}'), {"schema": schema}
-    )
+    result = validate_json(VerifierRequest(input="", output='{"name": "ada"}'), {"schema": schema})
     assert result.passed is True
 
 
@@ -212,7 +206,9 @@ def test_run_verifier_dispatches_from_schema_hook():
 
 
 def test_run_verifier_rejects_on_bad_entry_without_raising():
-    result = run_verifier({"entry": "adh.verifiers.nope:missing"}, VerifierRequest(input="", output=""))
+    result = run_verifier(
+        {"entry": "adh.verifiers.nope:missing"}, VerifierRequest(input="", output="")
+    )
     assert isinstance(result, VerifierResult)
     assert result.passed is False
     assert "could not load" in (result.detail or "")
@@ -248,10 +244,14 @@ def _write_clip(tmp_path, duration_s=6.0, width=1920, height=1080):
         b[80:84] = struct.pack(">I", int(h * 65536))
         return box(b"trak", box(b"tkhd", bytes(b)))
 
-    data = box(
-        b"ftyp",
-        b"isom" + struct.pack(">I", 512) + b"isomiso2mp41",
-    ) + box(b"moov", mvhd_v0(duration_s), tkhd(width, height)) + box(b"mdat", b"\x00" * 32)
+    data = (
+        box(
+            b"ftyp",
+            b"isom" + struct.pack(">I", 512) + b"isomiso2mp41",
+        )
+        + box(b"moov", mvhd_v0(duration_s), tkhd(width, height))
+        + box(b"mdat", b"\x00" * 32)
+    )
     p = tmp_path / "clip.mp4"
     p.write_bytes(data)
     return p
@@ -261,14 +261,18 @@ def _media_request(clip_path, *, sha256=None, media=None, extras_over=None):
     import hashlib
 
     exists = clip_path.is_file()
-    media = media if media is not None else {
-        "role": "video",
-        "path": "media/x.mp4",
-        "sha256": sha256
-        or (hashlib.sha256(clip_path.read_bytes()).hexdigest() if exists else "0" * 64),
-        "bytes": clip_path.stat().st_size if exists else 0,
-        "format": "mp4",
-    }
+    media = (
+        media
+        if media is not None
+        else {
+            "role": "video",
+            "path": "media/x.mp4",
+            "sha256": sha256
+            or (hashlib.sha256(clip_path.read_bytes()).hexdigest() if exists else "0" * 64),
+            "bytes": clip_path.stat().st_size if exists else 0,
+            "format": "mp4",
+        }
+    )
     extras = {"media": media, "media_abs_path": str(clip_path)}
     extras.update(extras_over or {})
     return VerifierRequest(input="scene", output="caption", extras=extras)
@@ -282,7 +286,9 @@ def _write_png(tmp_path, width=640, height=480):
     chunk = b"IHDR" + ihdr
     data = (
         b"\x89PNG\r\n\x1a\n"
-        + struct.pack(">I", len(ihdr)) + chunk + struct.pack(">I", 0)
+        + struct.pack(">I", len(ihdr))
+        + chunk
+        + struct.pack(">I", 0)
         + b"\x00\x00\x00\x00IEND\xaeB`\x82"
     )
     p = tmp_path / "img.png"

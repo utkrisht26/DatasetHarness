@@ -162,9 +162,7 @@ def ltx_layout(records: Sequence[Record], out_dir: Path, staged_root: Path) -> L
     prompts_path.write_text("".join(f"{line}\n" for line in prompts), encoding="utf-8")
 
     logger.info("ltx layout: %d clip(s) + metadata.jsonl + prompts.txt", len(video_paths))
-    return LayoutOutput(
-        files=(*video_paths, meta_path, prompts_path), paths_by_sha=by_sha
-    )
+    return LayoutOutput(files=(*video_paths, meta_path, prompts_path), paths_by_sha=by_sha)
 
 
 register_layout("hf", hf_layout)

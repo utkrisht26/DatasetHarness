@@ -64,7 +64,9 @@ class InMemoryContentFetcher:
             md = self.pages.get(current)
             if md is not None:
                 out.append(
-                    FetchedPage(url=current, markdown=md, license_hint=self.license_hints.get(current))
+                    FetchedPage(
+                        url=current, markdown=md, license_hint=self.license_hints.get(current)
+                    )
                 )
             for nxt in self.links.get(current, []):
                 if nxt not in seen:

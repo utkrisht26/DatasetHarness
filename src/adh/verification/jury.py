@@ -213,10 +213,18 @@ class SwapConsistencyPanel:
     ) -> PanelResult:
         passes = [
             self.inner.evaluate(
-                input=input, output=output, rubric=rubric, dimensions=dimensions, reference=reference
+                input=input,
+                output=output,
+                rubric=rubric,
+                dimensions=dimensions,
+                reference=reference,
             ),
             self.inner.evaluate(
-                input=output, output=input, rubric=rubric, dimensions=dimensions, reference=reference
+                input=output,
+                output=input,
+                rubric=rubric,
+                dimensions=dimensions,
+                reference=reference,
             ),
         ]
         models: list[str] = []
@@ -228,8 +236,7 @@ class SwapConsistencyPanel:
         if not scored:
             return PanelResult(scores={d: 0.0 for d in dimensions}, models=())
         mean = {
-            d: round(sum(p.scores.get(d, 0.0) for p in scored) / len(scored), 3)
-            for d in dimensions
+            d: round(sum(p.scores.get(d, 0.0) for p in scored) / len(scored), 3) for d in dimensions
         }
         return PanelResult(scores=mean, models=tuple(models))
 

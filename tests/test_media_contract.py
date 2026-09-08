@@ -183,16 +183,22 @@ def test_check_job_spec_rejects_unknown_delivery_layout():
 
 
 def test_discovery_constraints_carry_media_filters():
-    spec = _spec(discovery={
-        "channels": ["media"],
-        "constraints": {
-            "media_min_duration_s": 2,
-            "media_max_duration_s": 15,
-            "media_orientation": "landscape",
-        },
-    })
+    spec = _spec(
+        discovery={
+            "channels": ["media"],
+            "constraints": {
+                "media_min_duration_s": 2,
+                "media_max_duration_s": 15,
+                "media_orientation": "landscape",
+            },
+        }
+    )
     c = spec.discovery.constraints
-    assert (c.media_min_duration_s, c.media_max_duration_s, c.media_orientation) == (2, 15, "landscape")
+    assert (c.media_min_duration_s, c.media_max_duration_s, c.media_orientation) == (
+        2,
+        15,
+        "landscape",
+    )
 
 
 # ------------------------------------------------------------------- registry
@@ -250,10 +256,12 @@ def _two_records():
         split="validation",
         output="The couple dips mid-spin.",
     )
-    second = second.model_copy(update={
-        "media": _media(sha256=sha2, path=f"media/{sha2}.mp4"),
-        "source_sha256": sha2,
-    })
+    second = second.model_copy(
+        update={
+            "media": _media(sha256=sha2, path=f"media/{sha2}.mp4"),
+            "source_sha256": sha2,
+        }
+    )
     return [_record(), second]
 
 
@@ -411,10 +419,12 @@ def _stage_real(tmp_path, sha: str) -> None:
 def _second_record() -> Record:
     sha2 = "f" * 64
     rec = _record(record_id="rec-2", output="The couple dips mid-spin.")
-    return rec.model_copy(update={
-        "media": _media(sha256=sha2, path=f"media/{sha2}.mp4", bytes=len(CLIP_BYTES)),
-        "source_sha256": sha2,
-    })
+    return rec.model_copy(
+        update={
+            "media": _media(sha256=sha2, path=f"media/{sha2}.mp4", bytes=len(CLIP_BYTES)),
+            "source_sha256": sha2,
+        }
+    )
 
 
 def test_write_dataset_packages_media_assets_and_rows(tmp_path):
@@ -436,10 +446,7 @@ def test_write_dataset_packages_media_assets_and_rows(tmp_path):
     assert (out / "metadata.jsonl").exists()
     assert (out / "prompts.txt").exists()
 
-    rows = [
-        json.loads(line)
-        for line in (out / "manifest.jsonl").read_text().splitlines()
-    ]
+    rows = [json.loads(line) for line in (out / "manifest.jsonl").read_text().splitlines()]
     assets = [row for row in rows if row.get("kind") == "asset"]
     assert {a["sha256"] for a in assets} == {SHA, "f" * 64}
     for a in assets:
@@ -451,8 +458,12 @@ def test_write_dataset_packages_media_assets_and_rows(tmp_path):
         assert (out / a["path"]).exists(), a["path"]
 
     names = {p.relative_to(out).as_posix() for p in delivery.files}
-    assert {"train.parquet", *(f"videos/{v}" for v in video_files),
-            "metadata.jsonl", "prompts.txt"} <= names
+    assert {
+        "train.parquet",
+        *(f"videos/{v}" for v in video_files),
+        "metadata.jsonl",
+        "prompts.txt",
+    } <= names
 
 
 def test_write_dataset_asset_rows_carry_license_and_attribution(tmp_path):
@@ -465,8 +476,12 @@ def test_write_dataset_asset_rows_carry_license_and_attribution(tmp_path):
     _stage_real(tmp_path, "f" * 64)
     out = tmp_path / "dataset"
 
-    write_dataset([r1, r2], spec=_video_spec(job_id="job"), out_dir=out,
-                  staged_media_root=tmp_path / "media_staging")
+    write_dataset(
+        [r1, r2],
+        spec=_video_spec(job_id="job"),
+        out_dir=out,
+        staged_media_root=tmp_path / "media_staging",
+    )
 
     rows = [json.loads(line) for line in (out / "manifest.jsonl").read_text().splitlines()]
     assets = [row for row in rows if row.get("kind") == "asset"]
@@ -486,8 +501,7 @@ def test_write_dataset_parquet_roundtrip_preserves_media(tmp_path):
     spec = _video_spec(job_id="job")
     out = tmp_path / "dataset"
 
-    write_dataset([_record()], spec=spec, out_dir=out,
-                  staged_media_root=tmp_path / "media_staging")
+    write_dataset([_record()], spec=spec, out_dir=out, staged_media_root=tmp_path / "media_staging")
 
     table = pq.read_table(str(out / "train.parquet"))
     [row] = [decode_parquet_row(r) for r in table.to_pylist()]
@@ -499,8 +513,7 @@ def test_write_dataset_parquet_roundtrip_preserves_media(tmp_path):
 def test_write_dataset_without_staged_root_degrades_loudly(tmp_path):
     from adh.delivery import write_dataset
 
-    delivery = write_dataset([_record()], spec=_video_spec(job_id="job"),
-                             out_dir=tmp_path / "ds")
+    delivery = write_dataset([_record()], spec=_video_spec(job_id="job"), out_dir=tmp_path / "ds")
 
     assert any("staged_media_root" in n for n in delivery.notes)
     kinds = {
@@ -519,7 +532,8 @@ def test_publish_plan_preserves_media_subdirectories(tmp_path):
     (d / "train.jsonl").write_text('{"input": "x", "output": "y"}\n')
     (d / "videos" / "00000_aabbccdd.mp4").write_bytes(b"v")
     (d / "manifest.jsonl").write_text(
-        json.dumps({"kind": "shard", "split": "train", "path": "train.jsonl"}) + "\n"
+        json.dumps({"kind": "shard", "split": "train", "path": "train.jsonl"})
+        + "\n"
         + json.dumps(
             {
                 "kind": "asset",
@@ -546,8 +560,10 @@ def test_publish_plan_from_delivery_result_includes_layout_files(tmp_path):
 
     _stage_real(tmp_path, SHA)
     delivery = write_dataset(
-        [_record()], spec=_video_spec(job_id="job"),
-        out_dir=tmp_path / "dataset", staged_media_root=tmp_path / "media_staging",
+        [_record()],
+        spec=_video_spec(job_id="job"),
+        out_dir=tmp_path / "dataset",
+        staged_media_root=tmp_path / "media_staging",
     )
 
     result = publish_dataset(delivery, repo_id="u/d", license="cc-by-4.0", dry_run=True)
@@ -566,8 +582,12 @@ def test_evaluate_dataset_reports_media_stats(tmp_path):
     _stage_real(tmp_path, "f" * 64)
     out = tmp_path / "dataset"
 
-    write_dataset([r1, r2], spec=_video_spec(job_id="job"), out_dir=out,
-                  staged_media_root=tmp_path / "media_staging")
+    write_dataset(
+        [r1, r2],
+        spec=_video_spec(job_id="job"),
+        out_dir=out,
+        staged_media_root=tmp_path / "media_staging",
+    )
 
     report = evaluate_dataset(out, schema=VIDEO_SCHEMA)
 
@@ -582,20 +602,36 @@ def test_evaluate_dataset_reports_zero_media_for_text_jobs(tmp_path):
     """A plain text dataset carries no media stats rows beyond the zero defaults."""
     from adh.delivery import evaluate_dataset, write_dataset
 
-    text_spec = JobSpec(**{
-        "name": "t", "description": "d", "motivation": "m",
-        "intended_uses": ["sft"], "verifiability_tier": 2,
-        "task_categories": ["qa"], "languages": ["en"],
-        "target_size": {"records": 5}, "record_schema_ref": "./schemas/qa_record.schema.json",
-        "allowed_licenses": ["MIT"], "output_license": "MIT",
-        "generator_models": [],
-        "judge_config": {"models": ["anthropic:a", "openai:b"], "min_score": 3.5},
-        "splits": {"train": 1.0}, "output_format": "jsonl",
-    })
+    text_spec = JobSpec(
+        **{
+            "name": "t",
+            "description": "d",
+            "motivation": "m",
+            "intended_uses": ["sft"],
+            "verifiability_tier": 2,
+            "task_categories": ["qa"],
+            "languages": ["en"],
+            "target_size": {"records": 5},
+            "record_schema_ref": "./schemas/qa_record.schema.json",
+            "allowed_licenses": ["MIT"],
+            "output_license": "MIT",
+            "generator_models": [],
+            "judge_config": {"models": ["anthropic:a", "openai:b"], "min_score": 3.5},
+            "splits": {"train": 1.0},
+            "output_format": "jsonl",
+        }
+    )
     text_rec = Record(
-        record_id="r1", job_id="t", split="train", input="q", output="a",
-        source_channel=SourceChannel.WEB, model_id="m", prompt_hash="p",
-        generated_at=datetime.now(timezone.utc), pipeline_step="text-generation",
+        record_id="r1",
+        job_id="t",
+        split="train",
+        input="q",
+        output="a",
+        source_channel=SourceChannel.WEB,
+        model_id="m",
+        prompt_hash="p",
+        generated_at=datetime.now(timezone.utc),
+        pipeline_step="text-generation",
         verifiability_tier=VerifiabilityTier.SOFT,
     )
     out = tmp_path / "ds"

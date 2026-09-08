@@ -65,9 +65,7 @@ def _default_client_factory(api_key: str | None):
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     return _HttpxAdapter(
-        httpx.Client(
-            base_url="https://api.openverse.org", headers=headers, timeout=30.0
-        )
+        httpx.Client(base_url="https://api.openverse.org", headers=headers, timeout=30.0)
     )
 
 
@@ -91,9 +89,7 @@ class OpenverseImageProvider:
             self._client = factory(self.api_key)
         return self._client
 
-    def search(
-        self, query: str, *, limit: int, media_types=None
-    ) -> list[MediaHit]:
+    def search(self, query: str, *, limit: int, media_types=None) -> list[MediaHit]:
         page_size = max(1, min(limit, _MAX_PAGE_SIZE))
         if limit > _MAX_PAGE_SIZE:
             logger.warning(
@@ -152,9 +148,7 @@ class OpenverseImageProvider:
             duration_s=0.0,  # stills never invent durations
             width=int(item.get("width") or 0),
             height=int(item.get("height") or 0),
-            license=composed_license(
-                str(item.get("license") or ""), item.get("license_version")
-            ),
+            license=composed_license(str(item.get("license") or ""), item.get("license_version")),
             attribution=attribution,
             media_type="gif" if filetype == "gif" else "image",
         )

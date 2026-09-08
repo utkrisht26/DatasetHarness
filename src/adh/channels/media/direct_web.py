@@ -145,9 +145,7 @@ class _HtmlMediaExtractor(HTMLParser):
         if src:
             self._add(src, _typed(src, "image"), alt=attrs.get("alt"))
 
-    def _add(
-        self, raw_url: str, media_type: str | None, alt: str | None = None
-    ) -> None:
+    def _add(self, raw_url: str, media_type: str | None, alt: str | None = None) -> None:
         if media_type is None:  # unstorable container: skip rather than guess
             return
         url = raw_url.strip()
@@ -175,9 +173,7 @@ class DirectWebMediaProvider:
     max_asset_bytes: int = 512 * 1024 * 1024
     _state: dict = field(default_factory=dict, init=False, repr=False, compare=False)
 
-    def search(
-        self, query: str, *, limit: int, media_types=None
-    ) -> list[MediaHit]:
+    def search(self, query: str, *, limit: int, media_types=None) -> list[MediaHit]:
         wanted = frozenset(media_types) if media_types else None
         out: list[MediaHit] = []
         seen_urls: set[str] = set()

@@ -180,9 +180,7 @@ def _pinned_dns(hostname: str, allowed_ips: list[str]) -> Iterator[None]:
     with _dns_pin_lock:
         original = urllib3_connection.create_connection
 
-        def patched(
-            address: tuple[str, int], *args: Any, **kwargs: Any
-        ) -> socket.socket:
+        def patched(address: tuple[str, int], *args: Any, **kwargs: Any) -> socket.socket:
             host, port = address[0], address[1]
             if host != hostname:
                 return original(address, *args, **kwargs)

@@ -198,7 +198,8 @@ class SourceDiscoveryAgent:
             if self.media_provider is not None:
                 media = self._media_for(aspect, draft, spec, exclude)
                 passing = [
-                    s for s in media
+                    s
+                    for s in media
                     if s.evaluation.shape_match >= self.config.media_shape_threshold
                 ]
                 if passing:
@@ -208,14 +209,18 @@ class SourceDiscoveryAgent:
         # 1) datasets channel (reuse first)
         if SourceChannel.DATASETS in channels:
             ds = self._datasets_for(aspect, draft, spec, exclude)
-            passing = [s for s in ds if s.evaluation.shape_match >= self.config.dataset_shape_threshold]
+            passing = [
+                s for s in ds if s.evaluation.shape_match >= self.config.dataset_shape_threshold
+            ]
             if passing:
                 return SourceChannel.DATASETS, passing
 
         # 2) web channel (crawl when no ready dataset)
         if SourceChannel.WEB in channels:
             web = self._web_for(aspect, draft, spec, exclude)
-            passing = [s for s in web if s.evaluation.shape_match >= self.config.web_shape_threshold]
+            passing = [
+                s for s in web if s.evaluation.shape_match >= self.config.web_shape_threshold
+            ]
             if passing:
                 return SourceChannel.WEB, passing
 
@@ -399,9 +404,7 @@ def domain_allowed(url: str, spec: JobSpec) -> bool:
     if any(host == d.lower() or host.endswith("." + d.lower()) for d in c.exclude_domains):
         return False
     if c.include_domains:
-        return any(
-            host == d.lower() or host.endswith("." + d.lower()) for d in c.include_domains
-        )
+        return any(host == d.lower() or host.endswith("." + d.lower()) for d in c.include_domains)
     return True
 
 

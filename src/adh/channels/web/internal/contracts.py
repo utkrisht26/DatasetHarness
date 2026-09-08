@@ -30,6 +30,7 @@ class CrawlRequest:
     discovered while crawling re-enter the frontier as derived requests that
     inherit the seed's ``aspect_id``, constraints, and relevance vocabulary.
     """
+
     url: str
     max_pages: int = 1
     # The aspect this URL serves. Carried end-to-end so the router can flush /
@@ -61,9 +62,12 @@ class CrawlResponse:
     fields (no defaults) must precede optional ones — ``markdown`` defaults to ""
     so an error response can be built as ``CrawlResponse(url=u, error=...)``.
     """
+
     url: str
     markdown: str = ""
-    final_url: str | None = None  # redirect target — provenance records where content actually came from
+    final_url: str | None = (
+        None  # redirect target — provenance records where content actually came from
+    )
     license_hint: str | None = None
     status: int | None = None
     error: str | None = None

@@ -68,9 +68,7 @@ class TavilySearchProvider:
     # ---------------------------------------------------------------- internals
     def _build_default_client(self) -> object:
         if not self.api_key:
-            raise RuntimeError(
-                "TAVILY_API_KEY is not set; configure it or inject a client_factory"
-            )
+            raise RuntimeError("TAVILY_API_KEY is not set; configure it or inject a client_factory")
         try:
             from tavily import TavilyClient
         except ImportError as exc:  # pragma: no cover - needs the search extra

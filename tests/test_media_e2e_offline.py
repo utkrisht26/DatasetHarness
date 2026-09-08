@@ -302,9 +302,7 @@ def _wire_offline_publish(monkeypatch, tmp_path):
     monkeypatch.setattr("adh.cli.assert_publishable", lambda *a, **k: None)
 
 
-def test_cli_publish_threads_the_override_flag(
-    example_spec_path, tmp_path, capsys, monkeypatch
-):
+def test_cli_publish_threads_the_override_flag(example_spec_path, tmp_path, capsys, monkeypatch):
     captured: dict = {}
 
     def fake_publish(dataset_dir, **kwargs):

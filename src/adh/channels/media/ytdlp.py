@@ -46,9 +46,7 @@ _BASE_OPTS: dict[str, Any] = {
 }
 
 
-def _targets_for(
-    query: str, *, limit: int = 10, allow_ytsearch: bool = False
-) -> list[str]:
+def _targets_for(query: str, *, limit: int = 10, allow_ytsearch: bool = False) -> list[str]:
     """URL queries go straight to the page; plain text needs ytsearch opt-in."""
     q = query.strip()
     if q.startswith(("http://", "https://")):
@@ -152,7 +150,9 @@ class YtDlpMediaProvider:
         ``DownloadError`` (DRM refusal, no usable formats, dead extractor)
         propagates to the channel's per-asset guard — the loud-skip contract.
         """
-        tmpdir = Path(self.tmp_root) if self.tmp_root else Path(tempfile.mkdtemp(prefix="adh-ytdlp-"))
+        tmpdir = (
+            Path(self.tmp_root) if self.tmp_root else Path(tempfile.mkdtemp(prefix="adh-ytdlp-"))
+        )
         tmpdir.mkdir(parents=True, exist_ok=True)
         factory = self._factory()
         ydl = factory(self._ydl_opts(outtmpl_dir=tmpdir))

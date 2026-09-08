@@ -71,7 +71,9 @@ class CompositeMediaProvider:
             except Exception as exc:  # noqa: BLE001 - one dead source ≠ dead acquisition
                 logger.warning(
                     "media provider %s failed for query %r (%s); continuing",
-                    type(provider).__name__, query, exc,
+                    type(provider).__name__,
+                    query,
+                    exc,
                 )
                 continue
             for hit in hits:

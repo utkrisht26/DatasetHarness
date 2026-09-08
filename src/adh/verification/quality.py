@@ -53,11 +53,15 @@ class QualityFilter:
         alpha = sum(c.isalnum() or c.isspace() for c in text)
         symbol_ratio = 1.0 - alpha / len(text)
         if symbol_ratio > self.max_symbol_ratio:
-            return QualityResult(False, f"symbol ratio {symbol_ratio:.2f} > {self.max_symbol_ratio}")
+            return QualityResult(
+                False, f"symbol ratio {symbol_ratio:.2f} > {self.max_symbol_ratio}"
+            )
 
         dup = self._dup_line_ratio(text)
         if dup > self.max_dup_line_ratio:
-            return QualityResult(False, f"duplicate-line ratio {dup:.2f} > {self.max_dup_line_ratio}")
+            return QualityResult(
+                False, f"duplicate-line ratio {dup:.2f} > {self.max_dup_line_ratio}"
+            )
 
         top = self._top_ngram_ratio(words)
         if top > self.max_top_ngram_ratio:

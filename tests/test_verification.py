@@ -42,7 +42,13 @@ def _spec(tier=2, modality="text", **kw):
     return JobSpec(**base)
 
 
-def _cand(tier=2, *, input="Explain async macros clearly.", output="Async macros expand code at compile time to reduce boilerplate and keep call sites readable.", **kw):
+def _cand(
+    tier=2,
+    *,
+    input="Explain async macros clearly.",
+    output="Async macros expand code at compile time to reduce boilerplate and keep call sites readable.",
+    **kw,
+):
     return Candidate(
         candidate_id="c1",
         job_id="job",

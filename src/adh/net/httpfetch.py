@@ -91,9 +91,7 @@ def is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
 
 def resolve_hostname(hostname: str) -> list[str]:
     """Resolve a hostname to its address strings (the injectable DNS seam)."""
-    infos = socket.getaddrinfo(
-        hostname, None, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP
-    )
+    infos = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
     return [str(info[4][0]) for info in infos]
 
 
@@ -108,9 +106,7 @@ class SSRFPolicy:
         """Return ``(idna_hostname, validated_ips)`` or raise :class:`UrlBlocked`."""
         parts = urlsplit(url.strip())
         if parts.scheme not in _ALLOWED_SCHEMES:
-            raise UrlBlocked(
-                f"URL scheme not allowed: {parts.scheme!r} (must be http or https)"
-            )
+            raise UrlBlocked(f"URL scheme not allowed: {parts.scheme!r} (must be http or https)")
         hostname = parts.hostname
         if not hostname:
             raise UrlBlocked("URL is missing a hostname")
@@ -130,9 +126,7 @@ class SSRFPolicy:
                 raise UrlBlocked(f"hostname {hostname!r} resolved to malformed {raw!r}") from exc
             if is_blocked_ip(ip):
                 logger.warning("SSRF guard blocked %r: %s resolves to %s", url, hostname, ip)
-                raise UrlBlocked(
-                    f"URL hostname {hostname!r} resolves to blocked address {ip}"
-                )
+                raise UrlBlocked(f"URL hostname {hostname!r} resolves to blocked address {ip}")
             validated.append(str(ip))
         if not validated:
             raise UrlBlocked(f"hostname {hostname!r} resolved to no usable addresses")
@@ -173,9 +167,7 @@ class PoliteFetcher:
 
     #: httpx.Client-like transport factory; redirects DISABLED. Defaults to a
     #: lazy httpx client so wiring needs no import gymnastics (see above).
-    client_factory: Callable[[], Any] = field(
-        default_factory=lambda: _default_httpx_client()
-    )
+    client_factory: Callable[[], Any] = field(default_factory=lambda: _default_httpx_client())
     policy: SSRFPolicy = field(default_factory=SSRFPolicy)
     min_interval_s: float = 1.0
     max_crawl_delay_s: float = 10.0
@@ -306,7 +298,9 @@ class PoliteFetcher:
         self._robots_cache[netloc] = parser
         return parser
 
-    def _wait_turn(self, netloc: str, parser: urllib.robotparser.RobotFileParser | None = None) -> None:
+    def _wait_turn(
+        self, netloc: str, parser: urllib.robotparser.RobotFileParser | None = None
+    ) -> None:
         """Per-netloc spacing: max(min_interval, crawl-delay capped)."""
         if parser is None:
             parser = self._robots(netloc)

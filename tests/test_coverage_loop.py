@@ -192,7 +192,10 @@ def _manifest_chunk_rows(tmp_path) -> int:
 
 def _prepare_engine_a(spec, tmp_path):
     result = run_engine_a(
-        spec, work_dir=tmp_path, agent=_initial_agent(), channels=_initial_channels(),
+        spec,
+        work_dir=tmp_path,
+        agent=_initial_agent(),
+        channels=_initial_channels(),
         approver=AutoApprover(),
     )
     assert result.exit_reason == "completed"
@@ -234,7 +237,10 @@ def test_no_new_sources_stops_the_loop(minimal_spec_dict, tmp_path):
     _prepare_engine_a(spec, tmp_path)
 
     outcome = run_coverage_loop(
-        spec, work_dir=tmp_path, agent=_DryAgent(), channels=_loop_channels(),
+        spec,
+        work_dir=tmp_path,
+        agent=_DryAgent(),
+        channels=_loop_channels(),
         generator=HeuristicGenerator(),
         judge=HeuristicJudge(),
     )
@@ -250,8 +256,13 @@ def test_max_rounds_zero_never_rediscovering(minimal_spec_dict, tmp_path):
     _prepare_engine_a(spec, tmp_path)
 
     outcome = run_coverage_loop(
-        spec, work_dir=tmp_path, agent=_GapAgent(), channels=_loop_channels(),
-        max_rounds=0, generator=HeuristicGenerator(), judge=HeuristicJudge(),
+        spec,
+        work_dir=tmp_path,
+        agent=_GapAgent(),
+        channels=_loop_channels(),
+        max_rounds=0,
+        generator=HeuristicGenerator(),
+        judge=HeuristicJudge(),
     )
 
     assert outcome.exit_reason == "max_rounds"
@@ -288,7 +299,10 @@ def test_requires_an_engine_a_work_dir(minimal_spec_dict, tmp_path):
     spec = _spec(minimal_spec_dict)
     with pytest.raises(ValueError, match="[Ee]ngine A"):
         run_coverage_loop(
-            spec, work_dir=tmp_path, agent=_GapAgent(), channels={},
+            spec,
+            work_dir=tmp_path,
+            agent=_GapAgent(),
+            channels={},
             generator=HeuristicGenerator(),
             judge=HeuristicJudge(),
         )
@@ -305,8 +319,13 @@ def test_spec_divergence_is_resaved_before_the_loop(minimal_spec_dict, tmp_path)
     assert drifted != spec
 
     outcome = run_coverage_loop(
-        drifted, work_dir=tmp_path, agent=_GapAgent(), channels=_loop_channels(),
-        max_rounds=0, generator=HeuristicGenerator(), judge=HeuristicJudge(),
+        drifted,
+        work_dir=tmp_path,
+        agent=_GapAgent(),
+        channels=_loop_channels(),
+        max_rounds=0,
+        generator=HeuristicGenerator(),
+        judge=HeuristicJudge(),
     )
 
     assert outcome.exit_reason == "max_rounds"
@@ -329,9 +348,14 @@ def test_rejection_at_round_approval_stops_reacquisition(minimal_spec_dict, tmp_
     _prepare_engine_a(spec, tmp_path)
 
     outcome = run_coverage_loop(
-        spec, work_dir=tmp_path, agent=_GapAgent(), channels=_loop_channels(),
-        approver=_Rejector(), max_rounds=2,
-        generator=HeuristicGenerator(), judge=HeuristicJudge(),
+        spec,
+        work_dir=tmp_path,
+        agent=_GapAgent(),
+        channels=_loop_channels(),
+        approver=_Rejector(),
+        max_rounds=2,
+        generator=HeuristicGenerator(),
+        judge=HeuristicJudge(),
     )
 
     assert outcome.exit_reason == "reacquisition_stopped"
@@ -366,9 +390,14 @@ def test_mixed_dry_and_fresh_aspects_are_both_handled(minimal_spec_dict, tmp_pat
     baseline_chunks = _manifest_chunk_rows(tmp_path)
 
     outcome = run_coverage_loop(
-        spec, work_dir=tmp_path, agent=agent, channels=_loop_channels(),
-        approver=AutoApprover(), max_rounds=1,
-        generator=HeuristicGenerator(), judge=HeuristicJudge(),
+        spec,
+        work_dir=tmp_path,
+        agent=agent,
+        channels=_loop_channels(),
+        approver=AutoApprover(),
+        max_rounds=1,
+        generator=HeuristicGenerator(),
+        judge=HeuristicJudge(),
     )
 
     assert len(agent.seen) >= 2, "world must ask about several thin aspects"
@@ -438,10 +467,36 @@ def test_cli_loop_runs_the_driver(repo_root, tmp_path, capsys, monkeypatch):
     # hermetic even when a developer's shell/.env carries provider keys
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    assert cli.main(["run", str(spec_path), "--work-dir", str(tmp_path / "work"),
-                     "--autonomous", "--no-fetch", "--no-llm"]) == 0
-    assert cli.main(["loop", str(spec_path), "--work-dir", str(tmp_path / "work"),
-                     "--max-rounds", "1", "--autonomous", "--no-fetch", "--no-llm"]) == 0
+    assert (
+        cli.main(
+            [
+                "run",
+                str(spec_path),
+                "--work-dir",
+                str(tmp_path / "work"),
+                "--autonomous",
+                "--no-fetch",
+                "--no-llm",
+            ]
+        )
+        == 0
+    )
+    assert (
+        cli.main(
+            [
+                "loop",
+                str(spec_path),
+                "--work-dir",
+                str(tmp_path / "work"),
+                "--max-rounds",
+                "1",
+                "--autonomous",
+                "--no-fetch",
+                "--no-llm",
+            ]
+        )
+        == 0
+    )
     out = capsys.readouterr().out
     assert "coverage loop" in out.lower()
     assert "exit_reason=" in out

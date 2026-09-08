@@ -103,9 +103,16 @@ _SITE = {
 # --------------------------------------------------------------------- service basics
 def test_submit_poll_and_fetch_pages():
     with TestClient(_make_app(_SITE)) as client:
-        r = client.post("/api/jobs", json={"url": "https://ex.com/views/", "max_pages": 10,
-                                           "keywords": _KEYWORDS, "judge": "none",
-                                           "saturation": False})
+        r = client.post(
+            "/api/jobs",
+            json={
+                "url": "https://ex.com/views/",
+                "max_pages": 10,
+                "keywords": _KEYWORDS,
+                "judge": "none",
+                "saturation": False,
+            },
+        )
         assert r.status_code == 202
         job = _await_job(client, r.json()["job_id"])
         assert job["status"] == "succeeded"
@@ -118,9 +125,17 @@ def test_submit_poll_and_fetch_pages():
 
 def test_bm25_judge_drops_off_topic_server_side():
     with TestClient(_make_app(_SITE)) as client:
-        r = client.post("/api/jobs", json={"url": "https://ex.com/views/", "max_pages": 10,
-                                           "keywords": _KEYWORDS, "judge": "bm25",
-                                           "content_threshold": 0.25, "saturation": False})
+        r = client.post(
+            "/api/jobs",
+            json={
+                "url": "https://ex.com/views/",
+                "max_pages": 10,
+                "keywords": _KEYWORDS,
+                "judge": "bm25",
+                "content_threshold": 0.25,
+                "saturation": False,
+            },
+        )
         job = _await_job(client, r.json()["job_id"])
         urls = {p["url"] for p in job["pages"]}
         assert "https://ex.com/views/cbv/" in urls  # on-topic kept
@@ -132,9 +147,16 @@ def test_saturation_stops_before_budget():
     same = "identical content block repeated verbatim on every page of this site"
     chain = {f"https://ex.com/p{i}/": (same, [f"https://ex.com/p{i + 1}/"]) for i in range(8)}
     with TestClient(_make_app(chain)) as client:
-        r = client.post("/api/jobs", json={"url": "https://ex.com/p0/", "max_pages": 8,
-                                           "max_depth": 10, "judge": "none",
-                                           "saturation": True})
+        r = client.post(
+            "/api/jobs",
+            json={
+                "url": "https://ex.com/p0/",
+                "max_pages": 8,
+                "max_depth": 10,
+                "judge": "none",
+                "saturation": True,
+            },
+        )
         job = _await_job(client, r.json()["job_id"])
         assert job["saturated"] is True
         assert job["n_pages"] < 8  # stopped on novelty, not the budget
@@ -143,9 +165,17 @@ def test_saturation_stops_before_budget():
 def test_llm_judge_via_injected_factory_and_usage_endpoint():
     app = _make_app(_SITE, llm_judge_factory=lambda model_id, usage: _FakeLlmJudge(usage))
     with TestClient(app) as client:
-        r = client.post("/api/jobs", json={"url": "https://ex.com/views/", "max_pages": 10,
-                                           "keywords": _KEYWORDS, "judge": "llm",
-                                           "content_threshold": 0.5, "saturation": False})
+        r = client.post(
+            "/api/jobs",
+            json={
+                "url": "https://ex.com/views/",
+                "max_pages": 10,
+                "keywords": _KEYWORDS,
+                "judge": "llm",
+                "content_threshold": 0.5,
+                "saturation": False,
+            },
+        )
         job = _await_job(client, r.json()["job_id"])
         urls = {p["url"] for p in job["pages"]}
         assert "https://ex.com/donate/" not in urls  # LLM judge dropped it
@@ -165,8 +195,9 @@ def test_failed_job_reports_error():
     def broken_factory():
         raise RuntimeError("browser exploded")
 
-    fetcher = Crawl4AIContentFetcher(crawler_factory=broken_factory,
-                                     run_config_factory=lambda req: None)
+    fetcher = Crawl4AIContentFetcher(
+        crawler_factory=broken_factory, run_config_factory=lambda req: None
+    )
     with TestClient(create_app(fetcher)) as client:
         r = client.post("/api/jobs", json={"url": "https://ex.com/x/", "judge": "none"})
         job = _await_job(client, r.json()["job_id"])
@@ -179,14 +210,17 @@ def test_failed_job_reports_error():
 # --------------------------------------------------------------------- remote client
 def test_remote_fetcher_end_to_end_through_http():
     with TestClient(_make_app(_SITE)) as client:
-        remote = RemoteContentFetcher(client=client, poll_interval=0.01,
-                                      judge="bm25", content_threshold=0.25,
-                                      saturation=False)
+        remote = RemoteContentFetcher(
+            client=client,
+            poll_interval=0.01,
+            judge="bm25",
+            content_threshold=0.25,
+            saturation=False,
+        )
         from adh.channels.web.internal.contracts import CrawlRequest
 
         pages = remote.fetch_source(
-            CrawlRequest(url="https://ex.com/views/", max_pages=10,
-                         keywords=tuple(_KEYWORDS))
+            CrawlRequest(url="https://ex.com/views/", max_pages=10, keywords=tuple(_KEYWORDS))
         )
         urls = {p.url for p in pages}
         assert "https://ex.com/views/" in urls
@@ -204,8 +238,9 @@ def test_remote_fetcher_feeds_governor_post_hoc():
             return False
 
     with TestClient(_make_app(_SITE)) as client:
-        remote = RemoteContentFetcher(client=client, poll_interval=0.01, judge="none",
-                                      saturation=False)
+        remote = RemoteContentFetcher(
+            client=client, poll_interval=0.01, judge="none", saturation=False
+        )
         from adh.channels.web.internal.contracts import CrawlRequest, CrawlResponse
 
         gov = _Gov()

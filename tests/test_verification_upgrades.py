@@ -71,7 +71,13 @@ def _spec(tier=2, modality="text", **kw):
     return JobSpec(**base)
 
 
-def _cand(tier=2, *, input="Explain async macros clearly.", output="Async macros expand code at compile time to reduce boilerplate.", **kw):
+def _cand(
+    tier=2,
+    *,
+    input="Explain async macros clearly.",
+    output="Async macros expand code at compile time to reduce boilerplate.",
+    **kw,
+):
     return Candidate(
         candidate_id="c1",
         job_id="job",
@@ -165,19 +171,27 @@ def test_swap_panel_reference_threaded_to_both_passes():
 
 
 def test_swap_panel_survives_single_abstaining_pass():
-    abstain = PanelResult(scores={d: 0.0 for d in ("helpfulness", "correctness", "clarity")}, models=())
+    abstain = PanelResult(
+        scores={d: 0.0 for d in ("helpfulness", "correctness", "clarity")}, models=()
+    )
     judge = RecordingJudge([abstain, _scores(4.0)])
     dims = ("helpfulness", "correctness", "clarity")
-    result = SwapConsistencyPanel(judge).evaluate(input="q", output="a", rubric="r", dimensions=dims)
+    result = SwapConsistencyPanel(judge).evaluate(
+        input="q", output="a", rubric="r", dimensions=dims
+    )
     assert result.models == ("fake:recording",)
     assert result.overall == pytest.approx(4.0)
 
 
 def test_swap_panel_abstains_when_both_passes_fail():
-    abstain = PanelResult(scores={d: 0.0 for d in ("helpfulness", "correctness", "clarity")}, models=())
+    abstain = PanelResult(
+        scores={d: 0.0 for d in ("helpfulness", "correctness", "clarity")}, models=()
+    )
     judge = RecordingJudge([abstain, abstain])
     dims = ("helpfulness", "correctness", "clarity")
-    result = SwapConsistencyPanel(judge).evaluate(input="q", output="a", rubric="r", dimensions=dims)
+    result = SwapConsistencyPanel(judge).evaluate(
+        input="q", output="a", rubric="r", dimensions=dims
+    )
     assert result.models == ()
     assert result.overall == 0.0
 
@@ -193,7 +207,9 @@ def test_position_bias_is_cancelled_by_swapping():
 
         def evaluate(self, *, input, output, rubric, dimensions, reference=None):
             score = 5.0 if len(input) > len(output) else 1.0
-            return PanelResult(scores={d: float(score) for d in dimensions}, models=(self.model_id,))
+            return PanelResult(
+                scores={d: float(score) for d in dimensions}, models=(self.model_id,)
+            )
 
     dims = ("helpfulness", "correctness", "clarity")
     question, answer = "a much longer question statement", "the answer"
@@ -435,7 +451,11 @@ def test_decontaminator_from_spec_defaults_without_policy_fields(tmp_path):
 # ------------------------------------------------------------------ negative controls
 
 CODE_HOOK_TIMEOUT = 30
-MATH_HOOK = {"kind": "math", "entry": "adh.verifiers.math:check_equal", "timeout_s": CODE_HOOK_TIMEOUT}
+MATH_HOOK = {
+    "kind": "math",
+    "entry": "adh.verifiers.math:check_equal",
+    "timeout_s": CODE_HOOK_TIMEOUT,
+}
 
 
 class ExplodingJudge:
@@ -444,7 +464,9 @@ class ExplodingJudge:
     model_id = "fake:exploding"
 
     def evaluate(self, **_kw):
-        raise AssertionError("jury must never run after the deterministic gate dropped the candidate")
+        raise AssertionError(
+            "jury must never run after the deterministic gate dropped the candidate"
+        )
 
 
 GOOD_CODE = "def solve(x):\n    return x * 2\n"
@@ -483,7 +505,9 @@ MATH_BAD_CASES = [
 ]
 
 
-@pytest.mark.parametrize("case_name,output_text,reference", MATH_BAD_CASES, ids=[c[0] for c in MATH_BAD_CASES])
+@pytest.mark.parametrize(
+    "case_name,output_text,reference", MATH_BAD_CASES, ids=[c[0] for c in MATH_BAD_CASES]
+)
 def test_negative_control_tier1_math_dropped(case_name, output_text, reference):
     router = VerificationRouter(spec=_spec(tier=1), verifier_hook=MATH_HOOK)
     cand = _cand(tier=1, input="What is 20 * 20?", output=output_text, reference=reference)
@@ -494,7 +518,9 @@ def test_negative_control_tier1_math_dropped(case_name, output_text, reference):
 
 def test_positive_control_tier1_math_kept():
     router = VerificationRouter(spec=_spec(tier=1), verifier_hook=MATH_HOOK)
-    cand = _cand(tier=1, input="What is 20 * 20?", output="The answer is \\boxed{400}.", reference="4 * 100")
+    cand = _cand(
+        tier=1, input="What is 20 * 20?", output="The answer is \\boxed{400}.", reference="4 * 100"
+    )
     assert router.verify(cand).kept is True
 
 
@@ -515,7 +541,9 @@ def test_negative_control_tier3_gate_drops_before_jury(case_name, bad_code):
     assert verdict.judge_scores is None  # ...and the jury never ran
 
 
-@pytest.mark.parametrize("case_name,output_text,reference", MATH_BAD_CASES, ids=[c[0] for c in MATH_BAD_CASES])
+@pytest.mark.parametrize(
+    "case_name,output_text,reference", MATH_BAD_CASES, ids=[c[0] for c in MATH_BAD_CASES]
+)
 def test_negative_control_tier3_math_dropped_before_jury(case_name, output_text, reference):
     router = VerificationRouter(spec=_spec(tier=3), verifier_hook=MATH_HOOK, judge=ExplodingJudge())
     cand = _cand(tier=3, input="What is 20 * 20?", output=output_text, reference=reference)
@@ -533,7 +561,10 @@ def test_positive_control_tier3_reaches_jury_and_keeps_good_code():
     spec = _spec(
         tier=3,
         modality="code",
-        judge_config={"models": ["anthropic:claude-sonnet-4-6", "openai:gpt-judge"], "min_score": 1.0},
+        judge_config={
+            "models": ["anthropic:claude-sonnet-4-6", "openai:gpt-judge"],
+            "min_score": 1.0,
+        },
     )
     router = VerificationRouter(spec=spec, verifier_hook=hook, judge=HeuristicJudge())
     cand = _cand(tier=3, input="Double the input and explain.", output=GOOD_CODE, tests=CODE_TESTS)

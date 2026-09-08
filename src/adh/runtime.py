@@ -85,9 +85,7 @@ def _live_media_providers() -> tuple[list, list[str]]:
         from adh.net.httpfetch import PoliteFetcher
 
         search, _registry = live_ports()
-        providers.append(
-            DirectWebMediaProvider(search_provider=search, fetcher=PoliteFetcher())
-        )
+        providers.append(DirectWebMediaProvider(search_provider=search, fetcher=PoliteFetcher()))
     except Exception as exc:
         gaps.append(f"media/direct-web unavailable: {exc}")
     try:
@@ -128,13 +126,9 @@ def live_channels() -> dict:
         for note in gaps:
             print(f"[adh] {note}", file=sys.stderr)
         if providers:
-            channels[SourceChannel.MEDIA] = MediaChannel(
-                provider=CompositeMediaProvider(providers)
-            )
+            channels[SourceChannel.MEDIA] = MediaChannel(provider=CompositeMediaProvider(providers))
         else:
-            print(
-                "[adh] media channel unavailable: no backends installed", file=sys.stderr
-            )
+            print("[adh] media channel unavailable: no backends installed", file=sys.stderr)
     except Exception as exc:
         # Loud, not fatal: media jobs degrade to a coverage-gap note rather than
         # a text-about-media crawl.

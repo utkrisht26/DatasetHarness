@@ -43,5 +43,7 @@ def validate_json(request: VerifierRequest, config: dict) -> VerifierResult:
             passed=False, detail=f"schema violation at {list(exc.absolute_path)}: {exc.message}"
         )
     except jsonschema.SchemaError as exc:
-        return VerifierResult(passed=False, detail=f"x-verifier schema is itself invalid: {exc.message}")
+        return VerifierResult(
+            passed=False, detail=f"x-verifier schema is itself invalid: {exc.message}"
+        )
     return VerifierResult(passed=True, detail="valid JSON matching schema")

@@ -52,7 +52,13 @@ from adh.generation import (
     coverage_report,
 )
 from adh.generation.generator import Generator
-from adh.delivery import DeliveryResult, DatasetQualityReport, emit_docs, evaluate_dataset, write_dataset
+from adh.delivery import (
+    DeliveryResult,
+    DatasetQualityReport,
+    emit_docs,
+    evaluate_dataset,
+    write_dataset,
+)
 from adh.llm import UsageTracker
 from adh.verification import JudgePanel, VerificationRouter, Verdict, build_judge
 
@@ -139,7 +145,14 @@ def run_engine_b(
             seed=int(spec.generation_params.get("seed", 42)),
             diversity_strategy=spec.diversity_strategy,
         )
-    ).plan(job_id, aspects=aspects, chunks=chunks, handoffs=handoffs, n_seeds=n_seeds or target, spec=spec)
+    ).plan(
+        job_id,
+        aspects=aspects,
+        chunks=chunks,
+        handoffs=handoffs,
+        n_seeds=n_seeds or target,
+        spec=spec,
+    )
 
     # ---- durable state + prior verified candidates ----
     state = _load_bstate(work, job_id, resume)
@@ -148,12 +161,7 @@ def run_engine_b(
         novelty.is_novel(_novelty_key(cand))  # re-prime so resume keeps the diversity gate honest
     if kept:
         notes.append(f"resumed: {len(kept)} verified candidate(s) from prior run")
-    if (
-        resume
-        and not kept
-        and state.completed_seed_ids
-        and not state.counters.get("generated")
-    ):
+    if resume and not kept and state.completed_seed_ids and not state.counters.get("generated"):
         # A prior build marked seeds complete but generated nothing — the signature of a
         # transient provider outage swallowed inside the generator. Bookkeeping without
         # work must not strand the run: clear it so this build regenerates.
@@ -204,7 +212,10 @@ def run_engine_b(
     # media_staging holds the content-addressed clips Engine A downloaded; layouts
     # copy from there into the dataset. Absent for text jobs (no-op).
     delivery = write_dataset(
-        records, spec=spec, out_dir=dataset_dir, exit_reason=exit_reason,
+        records,
+        spec=spec,
+        out_dir=dataset_dir,
+        exit_reason=exit_reason,
         staged_media_root=work / "media_staging",
     )
     notes.extend(delivery.notes)
@@ -236,7 +247,14 @@ def run_engine_b(
     quality_md_path.write_text(quality.to_markdown(), encoding="utf-8")
 
     _write_summary(
-        summary_path, spec, exit_reason, metrics, counts, delivery, coverage, notes,
+        summary_path,
+        spec,
+        exit_reason,
+        metrics,
+        counts,
+        delivery,
+        coverage,
+        notes,
         quality=_quality_summary(quality),
     )
 
@@ -280,14 +298,17 @@ def _generate_and_verify(
     done_before = sum(1 for s in seeds if s.seed_id in state.completed_seed_ids)
     logger.info(
         "engine B: %d seed(s) to generate (%d already complete)",
-        total - done_before, done_before,
+        total - done_before,
+        done_before,
     )
     for seed in seeds:
         if seed.seed_id in state.completed_seed_ids:
             continue
         metrics = _metrics_now(state.base_metrics, usage)
         trip = breaker.check(
-            metrics, storage_mb=_storage_mb(store, seed.job_id), elapsed_seconds=clock_seconds() - start
+            metrics,
+            storage_mb=_storage_mb(store, seed.job_id),
+            elapsed_seconds=clock_seconds() - start,
         )
         if trip is not None:
             state.notes.append(f"circuit breaker: {trip}")
@@ -319,9 +340,13 @@ def _generate_and_verify(
         logger.info(
             "engine B progress: seed %d/%d (%s) — generated=%d kept=%d "
             "dropped_verifier=%d dropped_jury=%d errors=%d",
-            done_before, total, seed.aspect_id,
-            c.get("generated", 0), len(kept),
-            c.get("dropped_verifier", 0), c.get("dropped_jury", 0),
+            done_before,
+            total,
+            seed.aspect_id,
+            c.get("generated", 0),
+            len(kept),
+            c.get("dropped_verifier", 0),
+            c.get("dropped_jury", 0),
             c.get("generation_errors", 0),
         )
     return None
@@ -367,7 +392,11 @@ def _curate(kept, *, spec, schema, schema_base_dir, redactor=None, notes=None):
             output=redactor.redact(cand.output, output_entities),
             generation_params={
                 **cand.generation_params,
-                "pii_redaction": {"tool": redactor.name, "policy": "redact", "entity_types": entity_types},
+                "pii_redaction": {
+                    "tool": redactor.name,
+                    "policy": "redact",
+                    "entity_types": entity_types,
+                },
             },
         )
         pii_stats["pii_redacted"] += 1
@@ -418,9 +447,7 @@ def _curate(kept, *, spec, schema, schema_base_dir, redactor=None, notes=None):
 
 
 # --------------------------------------------------------------------- loaders
-def load_corpus(
-    work: Path, store: CorpusStore
-) -> tuple[list[CorpusChunk], list[SynthesisHandoff]]:
+def load_corpus(work: Path, store: CorpusStore) -> tuple[list[CorpusChunk], list[SynthesisHandoff]]:
     """Reconstruct Engine A's corpus chunks + synthesis hand-offs from its manifest."""
     manifest = Path(work) / "manifest.jsonl"
     chunks: list[CorpusChunk] = []
@@ -639,7 +666,9 @@ def _quality_summary(q: DatasetQualityReport) -> dict:
     }
 
 
-def _write_summary(path, spec, exit_reason, metrics, counts, delivery, coverage, notes, *, quality=None) -> None:
+def _write_summary(
+    path, spec, exit_reason, metrics, counts, delivery, coverage, notes, *, quality=None
+) -> None:
     summary = {
         "job_id": spec.job_id or spec.name,
         "engine": "B",

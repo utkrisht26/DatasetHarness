@@ -139,7 +139,9 @@ class LlmRelevanceJudge(RelevanceJudge):
     def score(self, query: str, content: str) -> float:
         if not query.strip():
             return 1.0
-        message = self.model.invoke(self.prompt.format(query=query, content=content[: self.max_chars]))
+        message = self.model.invoke(
+            self.prompt.format(query=query, content=content[: self.max_chars])
+        )
         self.usage.add_message(message)  # count tokens for this call
         text = getattr(message, "content", message)
         return _parse_score(str(text))

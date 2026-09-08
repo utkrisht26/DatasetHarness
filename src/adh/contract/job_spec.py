@@ -209,9 +209,7 @@ class JobSpec(BaseModel):
         # tier in {2,3} => judge panel from >=2 distinct model families (PoLL)
         if tier in (VerifiabilityTier.SOFT, VerifiabilityTier.HYBRID):
             if self.judge_config is None:
-                raise ValueError(
-                    f"verifiability_tier={int(tier)} requires judge_config (LLM-jury)"
-                )
+                raise ValueError(f"verifiability_tier={int(tier)} requires judge_config (LLM-jury)")
             families = distinct_families(self.judge_config.models)
             if len(families) < 2:
                 raise ValueError(

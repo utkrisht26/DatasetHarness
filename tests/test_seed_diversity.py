@@ -60,7 +60,10 @@ def _chunk(aspect_id="a1", text="Async macros let you write concise code.") -> C
 # --------------------------------------------------------------------- selection
 def test_no_strategy_set_keeps_legacy_persona_grid(minimal_spec_dict):
     """Default ('persona+evol'/None) stays backward compatible: persona x difficulty."""
-    for spec in (_spec(minimal_spec_dict), _spec(minimal_spec_dict, diversity_strategy="persona+evol")):
+    for spec in (
+        _spec(minimal_spec_dict),
+        _spec(minimal_spec_dict, diversity_strategy="persona+evol"),
+    ):
         seeds = SeedEngine(seed=3).plan(
             "job", aspects=ASPECTS, chunks=[_chunk("a1")], handoffs=[], n_seeds=6, spec=spec
         )
@@ -102,9 +105,7 @@ def test_resolve_strategy_unknown_falls_back_to_default():
 def test_determinism_same_spec_and_seed(minimal_spec_dict):
     spec_a = _spec(minimal_spec_dict, diversity_strategy="persona_hub", seed=11)
     spec_b = _spec(minimal_spec_dict, diversity_strategy="persona_hub", seed=11)
-    kwargs = dict(
-        aspects=ASPECTS, chunks=[_chunk("a1"), _chunk("a2")], handoffs=[], n_seeds=20
-    )
+    kwargs = dict(aspects=ASPECTS, chunks=[_chunk("a1"), _chunk("a2")], handoffs=[], n_seeds=20)
     a = SeedEngine().plan("job", spec=spec_a, **kwargs)
     b = SeedEngine().plan("job", spec=spec_b, **kwargs)
     assert a == b
@@ -139,9 +140,15 @@ def test_persona_hub_grid_shape():
 
 def test_persona_hub_selection_varies_with_seed_but_is_reproducible(minimal_spec_dict):
     kwargs = dict(aspects=ASPECTS[:1], chunks=[_chunk("a1")], handoffs=[], n_seeds=6)
-    low = SeedEngine().plan("job", spec=_spec(minimal_spec_dict, diversity_strategy="persona_hub", seed=101), **kwargs)
-    high = SeedEngine().plan("job", spec=_spec(minimal_spec_dict, diversity_strategy="persona_hub", seed=202), **kwargs)
-    again = SeedEngine().plan("job", spec=_spec(minimal_spec_dict, diversity_strategy="persona_hub", seed=101), **kwargs)
+    low = SeedEngine().plan(
+        "job", spec=_spec(minimal_spec_dict, diversity_strategy="persona_hub", seed=101), **kwargs
+    )
+    high = SeedEngine().plan(
+        "job", spec=_spec(minimal_spec_dict, diversity_strategy="persona_hub", seed=202), **kwargs
+    )
+    again = SeedEngine().plan(
+        "job", spec=_spec(minimal_spec_dict, diversity_strategy="persona_hub", seed=101), **kwargs
+    )
     assert [s.persona for s in again] == [s.persona for s in low]  # same seed -> same plan
     assert [s.persona for s in low] != [s.persona for s in high]  # different seed -> different mix
 
@@ -188,7 +195,9 @@ def test_unknown_strategy_logs_warning_and_uses_default(minimal_spec_dict, caplo
         seeds = SeedEngine(seed=3).plan(
             "job", aspects=ASPECTS[:1], chunks=[_chunk("a1")], handoffs=[], n_seeds=6, spec=spec
         )
-    assert any("chaos_monkey" in rec.message and rec.levelno == logging.WARNING for rec in caplog.records)
+    assert any(
+        "chaos_monkey" in rec.message and rec.levelno == logging.WARNING for rec in caplog.records
+    )
     # fell back to the legacy grid: plain personas, no evolution metadata
     assert all(s.persona in DEFAULT_PERSONAS for s in seeds)
     assert all(s.evolution_op == "" for s in seeds)
@@ -196,6 +205,8 @@ def test_unknown_strategy_logs_warning_and_uses_default(minimal_spec_dict, caplo
 
 # --------------------------------------------------------------------- legacy seams
 def test_plan_without_spec_still_works_like_before():
-    seeds = SeedEngine(seed=7).plan("job", aspects=ASPECTS, chunks=[_chunk("a1")], handoffs=[], n_seeds=4)
+    seeds = SeedEngine(seed=7).plan(
+        "job", aspects=ASPECTS, chunks=[_chunk("a1")], handoffs=[], n_seeds=4
+    )
     assert len(seeds) == 4
     assert all(s.persona in DEFAULT_PERSONAS for s in seeds)

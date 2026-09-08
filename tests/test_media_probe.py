@@ -118,7 +118,9 @@ def _png_bytes(width: int = 64, height: int = 32) -> bytes:
     chunk = b"IHDR" + ihdr
     return (
         b"\x89PNG\r\n\x1a\n"
-        + struct.pack(">I", len(ihdr)) + chunk + struct.pack(">I", 0)
+        + struct.pack(">I", len(ihdr))
+        + chunk
+        + struct.pack(">I", 0)
         + b"\x00\x00\x00\x00IEND\xaeB`\x82"
     )
 

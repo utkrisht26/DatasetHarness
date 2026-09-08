@@ -230,9 +230,7 @@ def test_fixed_mode_skips_research_entirely(minimal_spec_dict, tmp_path):
 
 def test_domain_constraints_filter_web_sources(minimal_spec_dict, tmp_path):
     """Harness-side domain policy overrides whatever the model reported."""
-    model = ScriptedChatModel(
-        messages=iter([_tool_call("DiscoveryReport", _REPORT_ARGS, "t1")])
-    )
+    model = ScriptedChatModel(messages=iter([_tool_call("DiscoveryReport", _REPORT_ARGS, "t1")]))
     plan = _agent(model).discover(
         _spec(
             minimal_spec_dict,
@@ -410,12 +408,13 @@ def test_discovery_tools_wrap_the_ports(tmp_path):
         pages=[SearchHit(url="https://a.com", title="A", snippet="rust async")]
     )
     web_search, dataset_search, sample_dataset = build_discovery_tools(search, registry, tmp_path)
-    
+
     web_res = web_search("rust async")
     assert "saved to virtual path 'research/web_search_1.json'" in web_res
     web_file = tmp_path / "research" / "web_search_1.json"
     assert web_file.exists()
     import json
+
     web_data = json.loads(web_file.read_text(encoding="utf-8"))
     assert web_data["results"][0]["url"] == "https://a.com"
 
@@ -451,9 +450,7 @@ def test_fallback_agent_degrades_to_heuristic(minimal_spec_dict, tmp_path):
 
 
 def test_fallback_agent_passes_through_primary_success(minimal_spec_dict, tmp_path):
-    model = ScriptedChatModel(
-        messages=iter([_tool_call("DiscoveryReport", _REPORT_ARGS, "t1")])
-    )
+    model = ScriptedChatModel(messages=iter([_tool_call("DiscoveryReport", _REPORT_ARGS, "t1")]))
     fallback = FallbackDiscoveryAgent(primary=_agent(model))
     plan = fallback.discover(_spec(minimal_spec_dict), tmp_path)
     assert "discovery: deepagents research loop" in plan.notes

@@ -65,7 +65,9 @@ def _provider(
     asset_bodies: dict[str, bytes] | None = None,
     **over,
 ):
-    serp = StubSerp(serp_pages or [SearchHit(url=PAGE_URL, title="Beach Photo Gallery", snippet="s")])
+    serp = StubSerp(
+        serp_pages or [SearchHit(url=PAGE_URL, title="Beach Photo Gallery", snippet="s")]
+    )
     fetcher = StubFetcher(pages, asset_bodies=asset_bodies)
     kwargs = {"search_provider": serp, "fetcher": fetcher, **over}
     return DirectWebMediaProvider(**kwargs), serp, fetcher
@@ -127,8 +129,10 @@ def test_non_html_or_blocked_pages_contribute_nothing(caplog):
         hits = provider.search("beach", limit=10)
 
     assert hits == []
-    assert any("skip" in r.getMessage().lower() or "unavailable" in r.getMessage().lower()
-               for r in caplog.records)
+    assert any(
+        "skip" in r.getMessage().lower() or "unavailable" in r.getMessage().lower()
+        for r in caplog.records
+    )
 
 
 def test_media_types_filter_narrows_the_harvest():
@@ -165,7 +169,8 @@ def test_download_streams_from_the_fetcher():
         asset_bodies={"https://cdn.example/big.png": body},
     )
     [hit] = (
-        h for h in provider.search("beach photos", limit=20)
+        h
+        for h in provider.search("beach photos", limit=20)
         if h.download_url == "https://cdn.example/big.png"
     )
 

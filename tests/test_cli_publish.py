@@ -101,11 +101,15 @@ def _prepare_run(minimal_spec_dict, repo_root, tmp_path) -> tuple[JobSpec, objec
             )
         )
     }
-    ea = run_engine_a(spec, work_dir=work, agent=agent, channels=channels,
-                      approver=AutoApprover())
+    ea = run_engine_a(spec, work_dir=work, agent=agent, channels=channels, approver=AutoApprover())
     assert ea.exit_reason == "completed"
-    eb = run_engine_b(spec, work_dir=work, generator=HeuristicGenerator(),
-                      judge=HeuristicJudge(), schema_base_dir=tmp_path)
+    eb = run_engine_b(
+        spec,
+        work_dir=work,
+        generator=HeuristicGenerator(),
+        judge=HeuristicJudge(),
+        schema_base_dir=tmp_path,
+    )
     assert eb.n_records > 0
     return spec_path, work
 
@@ -119,10 +123,16 @@ def test_publish_uploads_card_last_and_is_private_by_default(
     hub = _FakeHub()
     monkeypatch.setattr(cli, "default_hub_client", lambda: hub)
 
-    rc = cli.main([
-        "publish", str(spec_path), "--repo-id", "acme/rust-qa",
-        "--work-dir", str(work),
-    ])
+    rc = cli.main(
+        [
+            "publish",
+            str(spec_path),
+            "--repo-id",
+            "acme/rust-qa",
+            "--work-dir",
+            str(work),
+        ]
+    )
 
     assert rc == 0
     assert hub.created == [("acme/rust-qa", True)]  # private is the default
@@ -142,10 +152,17 @@ def test_publish_dry_run_plans_without_touching_the_hub(
     hub = _ExplosiveHub()
     monkeypatch.setattr(cli, "default_hub_client", lambda: hub)
 
-    rc = cli.main([
-        "publish", str(spec_path), "--repo-id", "acme/rust-qa",
-        "--work-dir", str(work), "--dry-run",
-    ])
+    rc = cli.main(
+        [
+            "publish",
+            str(spec_path),
+            "--repo-id",
+            "acme/rust-qa",
+            "--work-dir",
+            str(work),
+            "--dry-run",
+        ]
+    )
 
     assert rc == 0
     out = capsys.readouterr().out
@@ -170,10 +187,16 @@ def test_publish_refuses_when_the_quality_gate_fails(
 
     monkeypatch.setattr(cli, "evaluate_dataset", contaminated)
 
-    rc = cli.main([
-        "publish", str(spec_path), "--repo-id", "acme/rust-qa",
-        "--work-dir", str(work),
-    ])
+    rc = cli.main(
+        [
+            "publish",
+            str(spec_path),
+            "--repo-id",
+            "acme/rust-qa",
+            "--work-dir",
+            str(work),
+        ]
+    )
 
     assert rc != 0
     assert hub.created == [] and hub.uploaded == []  # nothing left the machine
@@ -191,10 +214,16 @@ def test_publish_requires_a_built_dataset(minimal_spec_dict, repo_root, tmp_path
     spec_path.parent.mkdir()
     spec_path.write_text(yaml.safe_dump(_spec_dict(minimal_spec_dict)), encoding="utf-8")
 
-    rc = cli.main([
-        "publish", str(spec_path), "--repo-id", "acme/rust-qa",
-        "--work-dir", str(tmp_path / "nowhere"),
-    ])
+    rc = cli.main(
+        [
+            "publish",
+            str(spec_path),
+            "--repo-id",
+            "acme/rust-qa",
+            "--work-dir",
+            str(tmp_path / "nowhere"),
+        ]
+    )
 
     assert rc == 1
     assert "build" in capsys.readouterr().err.lower()
@@ -215,10 +244,16 @@ def test_publish_missing_hub_extra_prints_install_hint_not_a_traceback(
 
     monkeypatch.setattr(cli, "default_hub_client", no_hub)
 
-    rc = cli.main([
-        "publish", str(spec_path), "--repo-id", "acme/rust-qa",
-        "--work-dir", str(work),
-    ])
+    rc = cli.main(
+        [
+            "publish",
+            str(spec_path),
+            "--repo-id",
+            "acme/rust-qa",
+            "--work-dir",
+            str(work),
+        ]
+    )
 
     assert rc == 1
     err = capsys.readouterr().err
@@ -234,14 +269,21 @@ def test_quality_report_markdown_renders_split_balance(tmp_path):
 
     stats = LengthStats(n=2, minimum=1, mean=2.0, p50=2.0, p95=3.0, maximum=3)
     report = DatasetQualityReport(
-        dataset_dir=Path(tmp_path), total_records=10,
+        dataset_dir=Path(tmp_path),
+        total_records=10,
         counts_by_split={"train": 9, "test": 1},
         split_fractions={"train": 0.9, "test": 0.1},
-        input_lengths=stats, output_lengths=stats,
-        duplicate_records=1, duplicate_rate=0.1,
-        contamination_residual_count=0, license_coverage=1.0,
-        unknown_license_records=0, schema_validation_pass_rate=1.0,
-        schema_failures=(), pii_residual_count=0, warnings=(),
+        input_lengths=stats,
+        output_lengths=stats,
+        duplicate_records=1,
+        duplicate_rate=0.1,
+        contamination_residual_count=0,
+        license_coverage=1.0,
+        unknown_license_records=0,
+        schema_validation_pass_rate=1.0,
+        schema_failures=(),
+        pii_residual_count=0,
+        warnings=(),
     )
     md = report.to_markdown()
     assert "| total_records | 10 |" in md

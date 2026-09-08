@@ -32,7 +32,7 @@ def _shape_instructions(tier: VerifiabilityTier, modality: str) -> str:
             return (
                 'Return JSON {"input": <problem statement>, "output": <complete Python '
                 'solution>, "tests": <pytest asserts that import names from the solution '
-                'and fail on a wrong answer>}. The tests MUST pass on your own output.'
+                "and fail on a wrong answer>}. The tests MUST pass on your own output."
             )
         return (
             'Return JSON {"input": <problem>, "output": <full worked solution>, '
@@ -54,7 +54,11 @@ def generation_prompt(seed: SeedPoint, spec: JobSpec, *, grounding: str = "") ->
         f"Language: {spec.languages[0] if spec.languages else 'en'}.",
     ]
     if grounding.strip():
-        lines.append("\nGround the record ONLY in this source context:\n---\n" + grounding[:_GROUNDING_BUDGET] + "\n---")
+        lines.append(
+            "\nGround the record ONLY in this source context:\n---\n"
+            + grounding[:_GROUNDING_BUDGET]
+            + "\n---"
+        )
     else:
         lines.append("\nNo source context is provided; generate from domain knowledge.")
     lines.append("\n" + _shape_instructions(tier, modality))

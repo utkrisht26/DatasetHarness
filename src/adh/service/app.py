@@ -80,9 +80,7 @@ def create_app(
     # same-origin and needs none; wildcard origins with credentials are never
     # combined (browsers reject the pair, and it would be a CSRF hazard anyway).
     cors_origins = [
-        o.strip()
-        for o in os.environ.get("ADH_CORS_ORIGINS", "").split(",")
-        if o.strip()
+        o.strip() for o in os.environ.get("ADH_CORS_ORIGINS", "").split(",") if o.strip()
     ]
     app.add_middleware(
         CORSMiddleware,

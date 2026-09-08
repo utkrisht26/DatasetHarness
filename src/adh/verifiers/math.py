@@ -72,7 +72,8 @@ def check_equal(request: VerifierRequest, config: dict) -> VerifierResult:
         diff = sympy.simplify(_to_expr(cand_raw) - _to_expr(ref_raw))
         equal = diff == 0
         return VerifierResult(
-            passed=bool(equal), detail=f"symbolic: {cand_raw!r} vs {ref_raw!r} -> equal={bool(equal)}"
+            passed=bool(equal),
+            detail=f"symbolic: {cand_raw!r} vs {ref_raw!r} -> equal={bool(equal)}",
         )
     except Exception as exc:  # noqa: BLE001 - unparseable expr falls back to string equality
         equal = _normalize(cand_raw) == _normalize(ref_raw)

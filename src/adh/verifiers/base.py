@@ -81,7 +81,8 @@ def run_verifier(hook: dict, request: VerifierRequest) -> VerifierResult:
         return VerifierResult(passed=False, detail=f"verifier {entry!r} errored: {exc}")
     if not isinstance(result, VerifierResult):
         return VerifierResult(
-            passed=False, detail=f"verifier {entry!r} returned {type(result).__name__}, not VerifierResult"
+            passed=False,
+            detail=f"verifier {entry!r} returned {type(result).__name__}, not VerifierResult",
         )
     return result
 

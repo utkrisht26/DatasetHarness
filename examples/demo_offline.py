@@ -133,16 +133,17 @@ def main() -> None:
     )
     print(f"exit_reason       : {result.exit_reason}")
     print(f"corpus chunks     : {result.n_chunks}")
-    print(f"  by channel      : "
-          f"{json.loads(result.summary_path.read_text())['chunks_by_channel']}")
+    print(f"  by channel      : {json.loads(result.summary_path.read_text())['chunks_by_channel']}")
     print(f"synthesis handoffs: {result.n_handoffs}")
     print(f"corpus tokens     : {sum(c.n_tokens for c in result.chunks)}")
 
     print("\nmanifest.jsonl (first rows):")
     for line in result.manifest_path.read_text().splitlines()[:4]:
         row = json.loads(line)
-        print(f"  - [{row['kind']}] {row.get('source_channel')} "
-              f"{row.get('source_url') or row.get('topic')}")
+        print(
+            f"  - [{row['kind']}] {row.get('source_channel')} "
+            f"{row.get('source_url') or row.get('topic')}"
+        )
 
     lineage = json.loads(result.lineage_path.read_text())
     print(f"\nlineage.json: {lineage['counts']} exit={lineage['exit_reason']}")
@@ -161,11 +162,15 @@ def main() -> None:
     )
     c = b.counts
     print(f"exit_reason       : {b.exit_reason}")
-    print(f"records shipped    : {b.n_records}  "
-          f"(from {c['generated']} generated, accept rate {c['accept_rate']:.1%})")
+    print(
+        f"records shipped    : {b.n_records}  "
+        f"(from {c['generated']} generated, accept rate {c['accept_rate']:.1%})"
+    )
     print(f"  by split        : {b.delivery.counts_by_split}")
-    print(f"  dropped         : quality={c['dropped_quality']} verifier={c['dropped_verifier']} "
-          f"jury={c['dropped_jury']} dup={c['duplicates']} dead={c['dead_lettered']}")
+    print(
+        f"  dropped         : quality={c['dropped_quality']} verifier={c['dropped_verifier']} "
+        f"jury={c['dropped_jury']} dup={c['duplicates']} dead={c['dead_lettered']}"
+    )
     print(f"dataset ({b.delivery.format}) -> {b.dataset_dir}")
     print(f"  docs            : {', '.join(p.name for p in b.docs)}")
 
@@ -177,8 +182,10 @@ def main() -> None:
             print("\nsample record:")
             print(f"  input : {rec['input'][:70]}")
             print(f"  output: {rec['output'][:70]}")
-            print(f"  split={rec['split']} tier={rec['verifiability_tier']} "
-                  f"judge={rec.get('judge_scores')} dedup={rec['dedup_cluster_id']}")
+            print(
+                f"  split={rec['split']} tier={rec['verifiability_tier']} "
+                f"judge={rec.get('judge_scores')} dedup={rec['dedup_cluster_id']}"
+            )
 
 
 if __name__ == "__main__":

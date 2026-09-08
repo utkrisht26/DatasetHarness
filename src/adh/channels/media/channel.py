@@ -142,22 +142,14 @@ class MediaChannel:
             # download sits inside the guard too: streaming providers raise
             # during acquisition (hotlink 403s), not only during staging.
             try:
-                payload = (
-                    hit.content
-                    if hit.content is not None
-                    else self.provider.download(hit)
-                )
+                payload = hit.content if hit.content is not None else self.provider.download(hit)
                 clip = staging.stage(ctx.job_id, payload, ext=ext, meta=meta)
             except StorageBudgetExceeded as exc:
-                logger.warning(
-                    "media storage budget reached for job %s: %s", ctx.job_id, exc
-                )
+                logger.warning("media storage budget reached for job %s: %s", ctx.job_id, exc)
                 break
             except Exception as exc:  # noqa: BLE001 - one dead asset ≠ dead acquisition
                 # Hotlink 403s, DRM refusals, expired rendition links: loud skip.
-                logger.warning(
-                    "skipping media %s: acquisition failed (%s)", hit.media_id, exc
-                )
+                logger.warning("skipping media %s: acquisition failed (%s)", hit.media_id, exc)
                 continue
 
             if clip.sha256 in seen_shas:  # identical bytes re-surfaced: keep one chunk
@@ -204,15 +196,9 @@ def _preview(hit: MediaHit) -> str:
 
 def _passes_filters(hit: MediaHit, c: DiscoveryConstraints) -> bool:
     if _is_temporal(hit):
-        if (
-            c.media_min_duration_s is not None
-            and hit.duration_s < c.media_min_duration_s
-        ):
+        if c.media_min_duration_s is not None and hit.duration_s < c.media_min_duration_s:
             return False
-        if (
-            c.media_max_duration_s is not None
-            and hit.duration_s > c.media_max_duration_s
-        ):
+        if c.media_max_duration_s is not None and hit.duration_s > c.media_max_duration_s:
             return False
     if c.media_orientation and hit.width and hit.height:
         if _orientation(hit.width, hit.height) != c.media_orientation:

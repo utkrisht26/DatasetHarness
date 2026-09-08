@@ -193,7 +193,7 @@ class CrawlServiceApp:
         record = self.get(job_id)
         if record is None:
             return
-        
+
         with record._lock:
             if record.cancelled:  # cancelled while still queued
                 record.status = "cancelled"
@@ -201,12 +201,14 @@ class CrawlServiceApp:
                 return
             record.status = "running"
             record.started_at = time.time()
-            record.events.append({
-                "timestamp": time.time(),
-                "url": record.request.url,
-                "verdict": "running",
-                "metadata": {"depth": 0}
-            })
+            record.events.append(
+                {
+                    "timestamp": time.time(),
+                    "url": record.request.url,
+                    "verdict": "running",
+                    "metadata": {"depth": 0},
+                }
+            )
             record.pages_fetched = 1
 
         req = record.request
@@ -223,12 +225,17 @@ class CrawlServiceApp:
                 if tracker.is_saturated():
                     with record._lock:
                         record.saturated = True
-                        record.events.append({
-                            "timestamp": time.time(),
-                            "url": resp.final_url or resp.url,
-                            "verdict": "saturated",
-                            "metadata": {"reason": "Novelty threshold reached (coverage saturated)", "depth": resp.depth}
-                        })
+                        record.events.append(
+                            {
+                                "timestamp": time.time(),
+                                "url": resp.final_url or resp.url,
+                                "verdict": "saturated",
+                                "metadata": {
+                                    "reason": "Novelty threshold reached (coverage saturated)",
+                                    "depth": resp.depth,
+                                },
+                            }
+                        )
                     return False
                 return True
 
@@ -236,12 +243,14 @@ class CrawlServiceApp:
                 with record._lock:
                     if verdict == "running":
                         record.pages_fetched += 1
-                    record.events.append({
-                        "timestamp": time.time(),
-                        "url": url,
-                        "verdict": verdict,
-                        "metadata": metadata
-                    })
+                    record.events.append(
+                        {
+                            "timestamp": time.time(),
+                            "url": url,
+                            "verdict": verdict,
+                            "metadata": metadata,
+                        }
+                    )
 
             seed = CrawlRequest(
                 url=req.url,
@@ -276,12 +285,14 @@ class CrawlServiceApp:
             with record._lock:
                 record.error = str(exc)
                 record.status = "failed"
-                record.events.append({
-                    "timestamp": time.time(),
-                    "url": req.url,
-                    "verdict": "failed",
-                    "metadata": {"error": str(exc), "reason": "Job execution failed"}
-                })
+                record.events.append(
+                    {
+                        "timestamp": time.time(),
+                        "url": req.url,
+                        "verdict": "failed",
+                        "metadata": {"error": str(exc), "reason": "Job execution failed"},
+                    }
+                )
         finally:
             with record._lock:
                 record.completed_at = time.time()

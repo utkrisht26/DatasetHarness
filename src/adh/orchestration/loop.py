@@ -55,7 +55,9 @@ class CoverageLoopResult:
 
     job_id: str
     rounds: int  # completed re-discovery + re-acquisition cycles
-    exit_reason: str  # coverage_closed | no_new_sources | max_rounds | cancelled | reacquisition_stopped
+    exit_reason: (
+        str  # coverage_closed | no_new_sources | max_rounds | cancelled | reacquisition_stopped
+    )
     result: EngineBResult  # final Engine B build over the final corpus
     acquisitions: list[EngineAResult] = field(default_factory=list)
     thin_aspects: tuple[str, ...] = ()  # still-thin aspects when the loop stopped
@@ -142,9 +144,7 @@ def run_coverage_loop(
         if not thin:
             return _outcome("coverage_closed")
         if rounds >= max_rounds:
-            notes.append(
-                f"round budget exhausted ({max_rounds}); still thin: {', '.join(thin)}"
-            )
+            notes.append(f"round budget exhausted ({max_rounds}); still thin: {', '.join(thin)}")
             return _outcome("max_rounds")
 
         merged, fresh_ids, dry_aspects = _rediscover_thin(spec, plan, thin, agent, notes)
@@ -157,8 +157,12 @@ def run_coverage_loop(
         save_plan(work, merged)  # audit trail + the copy resume_run loads
         decision = approver.review(merged)
         acquired = resume_run(
-            work, decision, channels=channels, store=store,
-            resume=True, should_cancel=should_cancel,
+            work,
+            decision,
+            channels=channels,
+            store=store,
+            resume=True,
+            should_cancel=should_cancel,
         )
         acquisitions.append(acquired)
         rounds += 1

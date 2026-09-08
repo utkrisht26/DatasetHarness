@@ -31,7 +31,10 @@ class FakeRedactor:
     name = "fake"
 
     def analyze(self, text: str) -> list[PIIEntity]:
-        return [PIIEntity("EMAIL_ADDRESS", m.start(), m.end(), 0.99) for m in re.finditer(r"\S+@\S+", text)]
+        return [
+            PIIEntity("EMAIL_ADDRESS", m.start(), m.end(), 0.99)
+            for m in re.finditer(r"\S+@\S+", text)
+        ]
 
     def redact(self, text: str, entities: list[PIIEntity]) -> str:
         for e in sorted(entities, key=lambda e: e.start, reverse=True):
@@ -96,7 +99,9 @@ def _curate_one(cand: Candidate, *, spec: JobSpec, redactor: FakeRedactor | None
 # --------------------------------------------------------------------- redact mode
 def test_redact_mode_rewrites_text_and_appends_provenance():
     spec = _spec(pii_policy="redact")
-    cand = _candidate(input="Email jane@example.org please.", output="Contact bob@example.org today.")
+    cand = _candidate(
+        input="Email jane@example.org please.", output="Contact bob@example.org today."
+    )
 
     records, dead, pii = _curate_one(cand, spec=spec, redactor=FakeRedactor())
 
