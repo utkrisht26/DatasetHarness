@@ -43,6 +43,20 @@ uv run adh run examples/rust_async_macros.yaml --autonomous --no-fetch
 uv run adh serve -v                                # gateway (+ verbose step trace)
 ```
 
+### Development checks
+
+Install the Git hook once after cloning, then run the complete check suite whenever needed:
+
+```bash
+uv sync
+uv run pre-commit install
+uv run pre-commit run --all-files
+```
+
+Pre-commit fixes trailing whitespace, missing final newlines, UTF-8 byte-order marks, and mixed
+line endings. It also validates common configuration formats and runs Ruff lint fixes followed by
+Ruff formatting for Python files.
+
 ## Media datasets (video & images — open-internet acquisition)
 
 Specs with `modality: "video"` or `modality: "image"` acquire **real media assets** instead of
