@@ -56,20 +56,26 @@ def _interactive_decision(plan) -> ApprovalDecision:
         ids = frozenset(s.source_id for s in plan.sources)
         return ApprovalDecision(ids, approve_synthesis=True, reason="interactive: all")
     if raw in ("n", "none"):
-        return ApprovalDecision(frozenset(), approve_synthesis=False, reason="interactive: none")
+        return ApprovalDecision(
+            frozenset(), approve_synthesis=False, reason="interactive: none"
+        )
     chosen = set()
     for tok in raw.replace(" ", "").split(","):
         if tok.isdigit():
             i = int(tok) - 1
             if 0 <= i < len(plan.sources):
                 chosen.add(plan.sources[i].source_id)
-    return ApprovalDecision(frozenset(chosen), approve_synthesis=True, reason="interactive: subset")
+    return ApprovalDecision(
+        frozenset(chosen), approve_synthesis=True, reason="interactive: subset"
+    )
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
     spec = load_job_spec(args.spec)
     report = check_job_spec(spec, base_dir=Path(args.spec).resolve().parent.parent)
-    print(f"Job spec {spec.name!r}: structural validation OK (tier {int(spec.verifiability_tier)})")
+    print(
+        f"Job spec {spec.name!r}: structural validation OK (tier {int(spec.verifiability_tier)})"
+    )
     for w in report.warnings:
         print(f"  warning: {w}")
     for e in report.errors:
@@ -82,7 +88,11 @@ def _cmd_validate(args: argparse.Namespace) -> int:
 
 def _discovery_model_from_args(args: argparse.Namespace) -> str | None:
     """The configured discovery model id, or None for heuristic-only discovery."""
-    return None if getattr(args, "no_llm", False) else getattr(args, "discovery_model", None)
+    return (
+        None
+        if getattr(args, "no_llm", False)
+        else getattr(args, "discovery_model", None)
+    )
 
 
 def _cmd_discover(args: argparse.Namespace) -> int:
@@ -157,17 +167,23 @@ def _cmd_build(args: argparse.Namespace) -> int:
     )
     c = result.counts
     print(f"\nEngine B finished: exit_reason={result.exit_reason!r}")
-    print(f"  records:      {result.n_records}  (from {c.get('generated', 0)} generated, "
-          f"accept rate {c.get('accept_rate', 0.0):.1%})")
+    print(
+        f"  records:      {result.n_records}  (from {c.get('generated', 0)} generated, "
+        f"accept rate {c.get('accept_rate', 0.0):.1%})"
+    )
     print(f"  by split:     {result.delivery.counts_by_split}")
-    print(f"  dropped:      quality={c.get('dropped_quality', 0)} verifier={c.get('dropped_verifier', 0)} "
-          f"jury={c.get('dropped_jury', 0)} dup={c.get('duplicates', 0)} dead={c.get('dead_lettered', 0)}")
+    print(
+        f"  dropped:      quality={c.get('dropped_quality', 0)} verifier={c.get('dropped_verifier', 0)} "
+        f"jury={c.get('dropped_jury', 0)} dup={c.get('duplicates', 0)} dead={c.get('dead_lettered', 0)}"
+    )
     print(f"  metrics:      {result.metrics.to_dict()}")
     print(f"  dataset:      {result.dataset_dir}  ({result.delivery.format})")
     if result.docs:
         print(f"  docs:         {', '.join(p.name for p in result.docs)}")
     if result.coverage.thin_aspects:
-        print(f"  thin aspects (re-discover candidates): {list(result.coverage.thin_aspects)}")
+        print(
+            f"  thin aspects (re-discover candidates): {list(result.coverage.thin_aspects)}"
+        )
     return 0
 
 
@@ -225,8 +241,10 @@ def _cmd_publish(args: argparse.Namespace) -> int:
     except NotPublishableError as exc:
         for reason in exc.reasons:
             print(f"  BLOCKED: {reason}", file=sys.stderr)
-        print("[adh] refusing to publish — fix the gate failures above or adjust --min-records",
-              file=sys.stderr)
+        print(
+            "[adh] refusing to publish — fix the gate failures above or adjust --min-records",
+            file=sys.stderr,
+        )
         return 1
 
     try:
@@ -255,7 +273,9 @@ def _cmd_publish(args: argparse.Namespace) -> int:
         return 1
     access = "public" if args.public else "private"
     if result.dry_run:
-        print(f"\nDry run: would upload {len(result.uploads)} file(s) to {args.repo_id} ({access}):")
+        print(
+            f"\nDry run: would upload {len(result.uploads)} file(s) to {args.repo_id} ({access}):"
+        )
         for item in result.uploads:
             print(f"  {item.repo_path}")
     else:
@@ -271,8 +291,10 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
         from adh.service.app import create_app
     except ImportError as exc:  # pragma: no cover - needs the serve extra
-        print(f"[adh] service needs the serve extra: pip install 'adh[serve]' ({exc})",
-              file=sys.stderr)
+        print(
+            f"[adh] service needs the serve extra: pip install 'adh[serve]' ({exc})",
+            file=sys.stderr,
+        )
         return 1
     app = create_app(
         runs_dir=args.runs_dir,
@@ -289,11 +311,15 @@ def _cmd_crawl_serve(args: argparse.Namespace) -> int:
 
         from adh.channels.web.app import create_app
     except ImportError as exc:  # pragma: no cover - needs the serve extra
-        print(f"[adh] crawl service needs the serve extra: pip install 'adh[serve]' ({exc})",
-              file=sys.stderr)
+        print(
+            f"[adh] crawl service needs the serve extra: pip install 'adh[serve]' ({exc})",
+            file=sys.stderr,
+        )
         return 1
-    print("[adh] crawl-serve is deprecated; use `adh serve` (crawl moved to /api/crawl/*)",
-          file=sys.stderr)
+    print(
+        "[adh] crawl-serve is deprecated; use `adh serve` (crawl moved to /api/crawl/*)",
+        file=sys.stderr,
+    )
     uvicorn.run(create_app(), host=args.host, port=args.port)
     return 0
 
@@ -312,10 +338,16 @@ def _logging_parent() -> argparse.ArgumentParser:
         help="log level (debug/info/warning/error); default INFO or $ADH_LOG_LEVEL",
     )
     common.add_argument(
-        "-v", "--verbose", action="store_true", help="verbose logging (DEBUG); shows tool results"
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="verbose logging (DEBUG); shows tool results",
     )
     common.add_argument(
-        "-q", "--quiet", action="store_true", help="quiet logging (WARNING and above only)"
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="quiet logging (WARNING and above only)",
     )
     return common
 
@@ -377,8 +409,12 @@ def _cmd_loop(args: argparse.Namespace) -> int:
 
     r = outcome.result
     c = r.counts
-    print(f"\nCoverage loop finished: exit_reason={outcome.exit_reason!r} rounds={outcome.rounds}")
-    print(f"  records:      {r.n_records}  (accept rate {c.get('accept_rate', 0.0):.1%})")
+    print(
+        f"\nCoverage loop finished: exit_reason={outcome.exit_reason!r} rounds={outcome.rounds}"
+    )
+    print(
+        f"  records:      {r.n_records}  (accept rate {c.get('accept_rate', 0.0):.1%})"
+    )
     print(f"  thin aspects: {list(outcome.thin_aspects) or 'none'}")
     if outcome.acquisitions:
         print(f"  acquisitions: {[a.exit_reason for a in outcome.acquisitions]}")
@@ -391,7 +427,8 @@ def _cmd_loop(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="adh", description="Agentic Dataset Harness — Engine A (discover+acquire) + Engine B (synthesize+curate)"
+        prog="adh",
+        description="Agentic Dataset Harness — Engine A (discover+acquire) + Engine B (synthesize+curate)",
     )
     common = _logging_parent()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -420,10 +457,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_run = sub.add_parser("run", parents=[common], help="run Engine A end-to-end")
     p_run.add_argument("spec")
-    p_run.add_argument("--work-dir", default=None, help="output directory (default ./runs/<job>)")
-    p_run.add_argument("--yes", action="store_true", help="approve all discovered sources")
-    p_run.add_argument("--autonomous", action="store_true", help="run without the approval gate")
-    p_run.add_argument("--fresh", action="store_true", help="ignore prior state (no resume)")
+    p_run.add_argument(
+        "--work-dir", default=None, help="output directory (default ./runs/<job>)"
+    )
+    p_run.add_argument(
+        "--yes", action="store_true", help="approve all discovered sources"
+    )
+    p_run.add_argument(
+        "--autonomous", action="store_true", help="run without the approval gate"
+    )
+    p_run.add_argument(
+        "--fresh", action="store_true", help="ignore prior state (no resume)"
+    )
     p_run.add_argument(
         "--discovery-model",
         default=DEFAULT_CHAT_MODEL,
@@ -442,11 +487,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.set_defaults(func=_cmd_run)
 
     p_build = sub.add_parser(
-        "build", parents=[common], help="run Engine B over an Engine A run dir -> dataset"
+        "build",
+        parents=[common],
+        help="run Engine B over an Engine A run dir -> dataset",
     )
     p_build.add_argument("spec")
-    p_build.add_argument("--work-dir", default=None, help="the Engine A run dir (default ./runs/<job>)")
-    p_build.add_argument("--fresh", action="store_true", help="ignore prior Engine B state (no resume)")
+    p_build.add_argument(
+        "--work-dir", default=None, help="the Engine A run dir (default ./runs/<job>)"
+    )
+    p_build.add_argument(
+        "--fresh", action="store_true", help="ignore prior Engine B state (no resume)"
+    )
     p_build.set_defaults(func=_cmd_build)
 
     p_loop = sub.add_parser(
@@ -464,8 +515,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=2,
         help="re-discovery round budget after the initial build (default 2)",
     )
-    p_loop.add_argument("--yes", action="store_true", help="approve re-discovered sources")
-    p_loop.add_argument("--autonomous", action="store_true", help="run without the approval gate")
+    p_loop.add_argument(
+        "--yes", action="store_true", help="approve re-discovered sources"
+    )
+    p_loop.add_argument(
+        "--autonomous", action="store_true", help="run without the approval gate"
+    )
     # no --fresh here on purpose: the loop always resumes durable state (that
     # continuity is its whole point); use `adh run --fresh` to restart Engine A.
     p_loop.add_argument(
@@ -487,11 +542,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_pub.add_argument("spec")
     p_pub.add_argument(
-        "--work-dir", default=None, help="the run dir holding dataset/ (default ./runs/<job>)"
+        "--work-dir",
+        default=None,
+        help="the run dir holding dataset/ (default ./runs/<job>)",
     )
-    p_pub.add_argument("--repo-id", required=True, help="target Hub dataset id (org/name)")
     p_pub.add_argument(
-        "--public", action="store_true", help="make the dataset public (default: private)"
+        "--repo-id", required=True, help="target Hub dataset id (org/name)"
+    )
+    p_pub.add_argument(
+        "--public",
+        action="store_true",
+        help="make the dataset public (default: private)",
     )
     p_pub.add_argument(
         "--allow-unknown-licenses",
@@ -500,7 +561,9 @@ def build_parser() -> argparse.ArgumentParser:
         "(two-layer license policy override; private uploads never need it)",
     )
     p_pub.add_argument(
-        "--dry-run", action="store_true", help="plan the upload without touching the Hub"
+        "--dry-run",
+        action="store_true",
+        help="plan the upload without touching the Hub",
     )
     p_pub.add_argument(
         "--min-records",
@@ -512,7 +575,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_pub.set_defaults(func=_cmd_publish)
 
     p_serve = sub.add_parser(
-        "serve", parents=[common], help="run the gateway service: /api/crawl/* + /api/runs/*"
+        "serve",
+        parents=[common],
+        help="run the gateway service: /api/crawl/* + /api/runs/*",
     )
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8000)

@@ -73,7 +73,8 @@ class MediaChannel:
     def fetch(self, source: RankedSource, ctx: FetchContext) -> list[CorpusChunk]:
         if ctx.staging_root is None:
             logger.warning(
-                "media channel skipped %s: no staging_root in FetchContext", source.source_id
+                "media channel skipped %s: no staging_root in FetchContext",
+                source.source_id,
             )
             return []
 
@@ -97,8 +98,11 @@ class MediaChannel:
             if wanted and hit.media_type not in wanted:
                 logger.warning(
                     "skipping %s %s: media_type %r not wanted for modality %r (wanted %s)",
-                    hit.media_type, hit.media_id, hit.media_type,
-                    ctx.spec.modality, sorted(wanted),
+                    hit.media_type,
+                    hit.media_id,
+                    hit.media_type,
+                    ctx.spec.modality,
+                    sorted(wanted),
                 )
                 continue
             if not _passes_filters(hit, constraints):
@@ -109,9 +113,15 @@ class MediaChannel:
             if not (known_ok or unknown_ok):
                 logger.warning(
                     "skipping %s %s: license %r incompatible with output %r%s",
-                    hit.media_type, hit.media_id, hit.license, ctx.spec.output_license,
-                    " (and unknown licenses are not allowed by this spec)"
-                    if normalized == "unknown" else "",
+                    hit.media_type,
+                    hit.media_id,
+                    hit.license,
+                    ctx.spec.output_license,
+                    (
+                        " (and unknown licenses are not allowed by this spec)"
+                        if normalized == "unknown"
+                        else ""
+                    ),
                 )
                 continue
 
@@ -133,11 +143,15 @@ class MediaChannel:
             # during acquisition (hotlink 403s), not only during staging.
             try:
                 payload = (
-                    hit.content if hit.content is not None else self.provider.download(hit)
+                    hit.content
+                    if hit.content is not None
+                    else self.provider.download(hit)
                 )
                 clip = staging.stage(ctx.job_id, payload, ext=ext, meta=meta)
             except StorageBudgetExceeded as exc:
-                logger.warning("media storage budget reached for job %s: %s", ctx.job_id, exc)
+                logger.warning(
+                    "media storage budget reached for job %s: %s", ctx.job_id, exc
+                )
                 break
             except Exception as exc:  # noqa: BLE001 - one dead asset ≠ dead acquisition
                 # Hotlink 403s, DRM refusals, expired rendition links: loud skip.
@@ -179,7 +193,7 @@ class MediaChannel:
 def _query_of(locator: str) -> str:
     for prefix in _LOCATOR_PREFIXES:
         if locator.startswith(prefix):
-            return locator[len(prefix):].strip()
+            return locator[len(prefix) :].strip()
     return locator.strip()
 
 
@@ -190,9 +204,15 @@ def _preview(hit: MediaHit) -> str:
 
 def _passes_filters(hit: MediaHit, c: DiscoveryConstraints) -> bool:
     if _is_temporal(hit):
-        if c.media_min_duration_s is not None and hit.duration_s < c.media_min_duration_s:
+        if (
+            c.media_min_duration_s is not None
+            and hit.duration_s < c.media_min_duration_s
+        ):
             return False
-        if c.media_max_duration_s is not None and hit.duration_s > c.media_max_duration_s:
+        if (
+            c.media_max_duration_s is not None
+            and hit.duration_s > c.media_max_duration_s
+        ):
             return False
     if c.media_orientation and hit.width and hit.height:
         if _orientation(hit.width, hit.height) != c.media_orientation:

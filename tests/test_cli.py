@@ -56,8 +56,11 @@ def test_cli_run_no_fetch_autonomous(example_spec_path, tmp_path, capsys, monkey
 
 def _plan() -> FetchPlan:
     cand = CandidateSource(
-        source_id="a0:web:https://x", channel=SourceChannel.WEB, locator="https://x",
-        title="X", aspect_id="a0",
+        source_id="a0:web:https://x",
+        channel=SourceChannel.WEB,
+        locator="https://x",
+        title="X",
+        aspect_id="a0",
     )
     ev = SourceEvaluation("a0:web:https://x", 0.5, 0.5, True, True, 5, 0.5)
     return FetchPlan(

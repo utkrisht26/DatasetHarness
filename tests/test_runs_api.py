@@ -33,7 +33,9 @@ def _spec_body(minimal_spec_dict, **overrides) -> dict:
     return d
 
 
-def _make_client(tmp_path, agent_factory=None, channels=None, **runs_kwargs) -> TestClient:
+def _make_client(
+    tmp_path, agent_factory=None, channels=None, **runs_kwargs
+) -> TestClient:
     runs = RunsService(
         tmp_path / "runs",
         agent_factory=agent_factory or (lambda usage: _mixed_agent()),
@@ -48,7 +50,9 @@ def _make_client(tmp_path, agent_factory=None, channels=None, **runs_kwargs) -> 
     return TestClient(create_app(crawl_service=crawl, runs_service=runs))
 
 
-def _await_status(client: TestClient, run_id: str, *statuses: str, timeout: float = 10.0) -> dict:
+def _await_status(
+    client: TestClient, run_id: str, *statuses: str, timeout: float = 10.0
+) -> dict:
     deadline = time.monotonic() + timeout
     run = None
     while time.monotonic() < deadline:
@@ -78,7 +82,9 @@ def test_post_run_pauses_at_awaiting_approval(minimal_spec_dict, tmp_path):
 
 def test_approve_subset_runs_to_succeeded(minimal_spec_dict, tmp_path):
     with _make_client(tmp_path) as client:
-        run_id = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()["run_id"]
+        run_id = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()[
+            "run_id"
+        ]
         run = _await_status(client, run_id, "awaiting_approval")
         web_ids = [
             s["source_id"] for s in run["plan"]["sources"] if s["channel"] == "web"
@@ -122,7 +128,9 @@ def test_restart_cancelled_run_starts_fresh_with_same_spec(minimal_spec_dict, tm
     import json as _json
 
     with _make_client(tmp_path) as client:
-        original = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()["run_id"]
+        original = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()[
+            "run_id"
+        ]
         _await_status(client, original, "awaiting_approval")
         client.post(f"/api/runs/{original}/cancel")
 
@@ -137,7 +145,9 @@ def test_restart_cancelled_run_starts_fresh_with_same_spec(minimal_spec_dict, tm
 
         # identical config: the new dir persists the very same spec document
         old_spec = _json.loads((tmp_path / "runs" / original / "spec.json").read_text())
-        new_spec = _json.loads((tmp_path / "runs" / fresh["run_id"] / "spec.json").read_text())
+        new_spec = _json.loads(
+            (tmp_path / "runs" / fresh["run_id"] / "spec.json").read_text()
+        )
         assert old_spec == new_spec
 
         # offline world: the fresh run re-discovers and parks at the gate again,
@@ -161,20 +171,26 @@ def test_restart_failed_run_reruns_discovery(minimal_spec_dict, tmp_path):
         return _mixed_agent()
 
     with _make_client(tmp_path, agent_factory=flaky_factory) as client:
-        dead = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()["run_id"]
+        dead = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()[
+            "run_id"
+        ]
         final = _await_status(client, dead, *TERMINAL)
         assert final["status"] == "failed"
         assert "search provider down" in final["error"]
 
         r = client.post(f"/api/runs/{dead}/restart")
         assert r.status_code == 202
-        parked = _await_status(client, r.json()["run_id"], *TERMINAL, "awaiting_approval")
+        parked = _await_status(
+            client, r.json()["run_id"], *TERMINAL, "awaiting_approval"
+        )
         assert parked["status"] == "awaiting_approval"  # healthy agent -> full rerun
 
 
 def test_restart_non_terminal_run_is_409(minimal_spec_dict, tmp_path):
     with _make_client(tmp_path) as client:
-        run_id = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()["run_id"]
+        run_id = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()[
+            "run_id"
+        ]
         _await_status(client, run_id, "awaiting_approval")
         r = client.post(f"/api/runs/{run_id}/restart")
         assert r.status_code == 409
@@ -184,7 +200,9 @@ def test_restart_non_terminal_run_is_409(minimal_spec_dict, tmp_path):
 
 def test_double_approve_is_409(minimal_spec_dict, tmp_path):
     with _make_client(tmp_path) as client:
-        run_id = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()["run_id"]
+        run_id = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()[
+            "run_id"
+        ]
         _await_status(client, run_id, "awaiting_approval")
         assert client.post(f"/api/runs/{run_id}/approve", json={}).status_code == 200
         second = client.post(f"/api/runs/{run_id}/approve", json={})
@@ -194,7 +212,9 @@ def test_double_approve_is_409(minimal_spec_dict, tmp_path):
 
 def test_approve_with_unknown_source_ids_is_422(minimal_spec_dict, tmp_path):
     with _make_client(tmp_path) as client:
-        run_id = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()["run_id"]
+        run_id = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()[
+            "run_id"
+        ]
         _await_status(client, run_id, "awaiting_approval")
         r = client.post(
             f"/api/runs/{run_id}/approve", json={"approved_source_ids": ["made:up:id"]}
@@ -211,7 +231,9 @@ def test_invalid_spec_body_is_422(tmp_path):
 
 def test_cancel_while_awaiting_then_approve_is_409(minimal_spec_dict, tmp_path):
     with _make_client(tmp_path) as client:
-        run_id = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()["run_id"]
+        run_id = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()[
+            "run_id"
+        ]
         _await_status(client, run_id, "awaiting_approval")
         assert client.post(f"/api/runs/{run_id}/cancel").status_code == 200
         assert client.get(f"/api/runs/{run_id}").json()["status"] == "cancelled"
@@ -272,7 +294,9 @@ def test_cancel_during_acquisition_stops_mid_run(minimal_spec_dict, tmp_path):
 # --------------------------------------------------------------- persistence
 def test_awaiting_approval_survives_restart(minimal_spec_dict, tmp_path):
     with _make_client(tmp_path) as client:
-        run_id = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()["run_id"]
+        run_id = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()[
+            "run_id"
+        ]
         _await_status(client, run_id, "awaiting_approval")
 
     # "restart": a brand-new service + app over the same base dir
@@ -292,13 +316,17 @@ def test_discovery_tokens_metered_through_the_api(minimal_spec_dict, tmp_path):
         return _mixed_agent()
 
     with _make_client(tmp_path, agent_factory=counting_agent) as client:
-        run_id = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()["run_id"]
+        run_id = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()[
+            "run_id"
+        ]
         run = _await_status(client, run_id, "awaiting_approval")
         assert run["metrics"]["llm_tokens"] == 1250
         assert run["metrics"]["cost_usd"] is None  # provider gave no cost -> unknown
 
 
-def test_discovery_over_budget_parks_usable_plan_for_review(minimal_spec_dict, tmp_path):
+def test_discovery_over_budget_parks_usable_plan_for_review(
+    minimal_spec_dict, tmp_path
+):
     def expensive_agent(usage: UsageTracker):
         usage.add(TokenUsage(input_tokens=5_000, output_tokens=0))
         return _mixed_agent()
@@ -322,7 +350,10 @@ def _offline_build_client(tmp_path, **overrides) -> TestClient:
     from adh.generation import HeuristicGenerator
     from adh.verification import HeuristicJudge
 
-    kwargs = {"engine_b_generator": HeuristicGenerator(), "engine_b_judge": HeuristicJudge()}
+    kwargs = {
+        "engine_b_generator": HeuristicGenerator(),
+        "engine_b_judge": HeuristicJudge(),
+    }
     kwargs.update(overrides)
     return _make_client(tmp_path, **kwargs)
 
@@ -338,7 +369,9 @@ def _run_to_succeeded(client: TestClient, minimal_spec_dict, **spec_overrides) -
 
 def test_build_endpoint_produces_a_dataset(minimal_spec_dict, tmp_path):
     with _offline_build_client(tmp_path) as client:
-        run_id = _run_to_succeeded(client, minimal_spec_dict, target_size={"records": 6})
+        run_id = _run_to_succeeded(
+            client, minimal_spec_dict, target_size={"records": 6}
+        )
 
         # nothing built yet -> the dataset endpoint says so
         assert client.get(f"/api/runs/{run_id}/dataset").status_code == 404
@@ -375,10 +408,10 @@ def test_double_build_in_flight_is_409(minimal_spec_dict, tmp_path):
             _time.sleep(0.5)
             return super().generate(seed, spec=spec, store=store)
 
-    with _offline_build_client(
-        tmp_path, engine_b_generator=SlowGenerator()
-    ) as client:
-        run_id = _run_to_succeeded(client, minimal_spec_dict, target_size={"records": 6})
+    with _offline_build_client(tmp_path, engine_b_generator=SlowGenerator()) as client:
+        run_id = _run_to_succeeded(
+            client, minimal_spec_dict, target_size={"records": 6}
+        )
         assert client.post(f"/api/runs/{run_id}/build").status_code == 202
         second = client.post(f"/api/runs/{run_id}/build")
         assert second.status_code == 409
@@ -396,18 +429,25 @@ def test_failed_build_returns_to_succeeded_with_note(minimal_spec_dict, tmp_path
     from adh.generation import HeuristicGenerator
 
     with _offline_build_client(
-        tmp_path, engine_b_generator=HeuristicGenerator(), engine_b_judge=ExplodingJudge()
+        tmp_path,
+        engine_b_generator=HeuristicGenerator(),
+        engine_b_judge=ExplodingJudge(),
     ) as client:
         run_id = _run_to_succeeded(client, minimal_spec_dict)
         assert client.post(f"/api/runs/{run_id}/build").status_code == 202
         final = _await_status(client, run_id, "succeeded")
-        assert any("engine B build failed" in n and "jury exploded" in n for n in final["notes"])
+        assert any(
+            "engine B build failed" in n and "jury exploded" in n
+            for n in final["notes"]
+        )
         assert client.get(f"/api/runs/{run_id}/dataset").status_code == 404
 
 
 def test_build_on_unsucceeded_run_and_unknown_run_conflict(minimal_spec_dict, tmp_path):
     with _offline_build_client(tmp_path) as client:
-        run_id = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()["run_id"]
+        run_id = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()[
+            "run_id"
+        ]
         _await_status(client, run_id, "awaiting_approval")
         r = client.post(f"/api/runs/{run_id}/build")
         assert r.status_code == 409
@@ -430,7 +470,11 @@ def test_deep_agent_seeds_drive_the_crawler_end_to_end(minimal_spec_dict, tmp_pa
     seed_url = "https://docs.rs/tokio/latest/tokio/"
     report = {
         "aspects": [
-            {"topic": "rust async macros", "rationale": "core", "keywords": ["rust", "async"]}
+            {
+                "topic": "rust async macros",
+                "rationale": "core",
+                "keywords": ["rust", "async"],
+            }
         ],
         "sources": [
             {
@@ -467,8 +511,12 @@ def test_deep_agent_seeds_drive_the_crawler_end_to_end(minimal_spec_dict, tmp_pa
             )
         )
     }
-    with _make_client(tmp_path, agent_factory=seed_proposing_agent, channels=channels) as client:
-        run_id = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()["run_id"]
+    with _make_client(
+        tmp_path, agent_factory=seed_proposing_agent, channels=channels
+    ) as client:
+        run_id = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()[
+            "run_id"
+        ]
         run = _await_status(client, run_id, "awaiting_approval")
         # the plan shows the agent-proposed seed at the approval gate
         assert [s["locator"] for s in run["plan"]["sources"]] == [seed_url]
@@ -503,7 +551,9 @@ def test_restart_with_edited_spec_runs_from_the_new_config(minimal_spec_dict, tm
     import json as _json
 
     with _make_client(tmp_path) as client:
-        original = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()["run_id"]
+        original = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()[
+            "run_id"
+        ]
         _await_status(client, original, "awaiting_approval")
         client.post(f"/api/runs/{original}/cancel")
 
@@ -517,7 +567,9 @@ def test_restart_with_edited_spec_runs_from_the_new_config(minimal_spec_dict, tm
         assert fresh["run_id"] != original
 
         # the new dir persists the EDITED document, not the old one
-        new_spec = _json.loads((tmp_path / "runs" / fresh["run_id"] / "spec.json").read_text())
+        new_spec = _json.loads(
+            (tmp_path / "runs" / fresh["run_id"] / "spec.json").read_text()
+        )
         assert new_spec["name"] == "edited-name"
         assert new_spec["motivation"] == "revised motivation"
         # ...while the cancelled history keeps its own spec untouched
@@ -530,7 +582,9 @@ def test_restart_with_edited_spec_runs_from_the_new_config(minimal_spec_dict, tm
 
 def test_restart_rejects_an_invalid_spec_with_422(minimal_spec_dict, tmp_path):
     with _make_client(tmp_path) as client:
-        original = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()["run_id"]
+        original = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()[
+            "run_id"
+        ]
         _await_status(client, original, "awaiting_approval")
         client.post(f"/api/runs/{original}/cancel")
 

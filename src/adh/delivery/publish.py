@@ -185,7 +185,9 @@ class _DatasetBundle:
     job_id: str | None
 
 
-def _iter_jsonl_objects(path: Path, *, ignore_invalid: bool = False) -> Iterator[dict[str, Any]]:
+def _iter_jsonl_objects(
+    path: Path, *, ignore_invalid: bool = False
+) -> Iterator[dict[str, Any]]:
     """Yield JSON objects with useful errors and bounded memory usage."""
     with path.open(encoding="utf-8") as lines:
         for line_number, line in enumerate(lines, start=1):
@@ -203,7 +205,9 @@ def _iter_jsonl_objects(path: Path, *, ignore_invalid: bool = False) -> Iterator
             if not isinstance(value, dict):
                 if ignore_invalid:
                     continue
-                raise ValueError(f"expected a JSON object in {path} at line {line_number}")
+                raise ValueError(
+                    f"expected a JSON object in {path} at line {line_number}"
+                )
             yield value
 
 
@@ -232,7 +236,9 @@ def _read_manifest(dataset_dir: Path, manifest_path: Path) -> _ManifestData:
 
         value = row.get("path")
         if not isinstance(value, str) or not value.strip():
-            raise ValueError(f"manifest {manifest_path} has a {kind!r} row without a valid path")
+            raise ValueError(
+                f"manifest {manifest_path} has a {kind!r} row without a valid path"
+            )
         local_path = _contained_path(dataset_dir, dataset_dir / value)
         upload_files.append(local_path)
         if kind == "shard":
@@ -261,10 +267,14 @@ def _resolve_dataset(result_or_dir: DeliveryResult | str | Path) -> _DatasetBund
         else _manifest_if_present(dataset_dir)
     )
     manifest_path = (
-        _contained_path(dataset_dir, Path(raw_manifest)) if raw_manifest is not None else None
+        _contained_path(dataset_dir, Path(raw_manifest))
+        if raw_manifest is not None
+        else None
     )
     manifest = (
-        _read_manifest(dataset_dir, manifest_path) if manifest_path is not None else _ManifestData()
+        _read_manifest(dataset_dir, manifest_path)
+        if manifest_path is not None
+        else _ManifestData()
     )
 
     if isinstance(result_or_dir, DeliveryResult):
@@ -385,7 +395,9 @@ def _build_dataset_card(
     return f"---\n{front.strip()}\n---\n\n{body.rstrip()}\n"
 
 
-def _set_optional_list(metadata: dict[str, Any], key: str, values: Sequence[str] | None) -> None:
+def _set_optional_list(
+    metadata: dict[str, Any], key: str, values: Sequence[str] | None
+) -> None:
     """Preserve omitted metadata, while allowing an explicit empty list to clear it."""
     if values is None:
         return
@@ -409,7 +421,11 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     if not lines or lines[0].strip() != "---":
         return {}, text
     try:
-        end = next(index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---")
+        end = next(
+            index
+            for index, line in enumerate(lines[1:], start=1)
+            if line.strip() == "---"
+        )
     except StopIteration:
         return {}, text
     loaded = yaml.safe_load("\n".join(lines[1:end]))
@@ -420,14 +436,19 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 def _replace_section(body: str, heading: str, replacement: str) -> str:
     """Swap out one ``## <heading>`` section (everything up to the next heading)."""
     lines = body.splitlines()
-    start = next((i for i, ln in enumerate(lines) if ln.strip() == f"## {heading}"), None)
+    start = next(
+        (i for i, ln in enumerate(lines) if ln.strip() == f"## {heading}"), None
+    )
     if start is None:
         return body.rstrip() + "\n\n" + replacement.rstrip() + "\n"
     end = next(
         (i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")),
         len(lines),
     )
-    return "\n".join([*lines[:start], *replacement.splitlines(), *lines[end:]]).rstrip() + "\n"
+    return (
+        "\n".join([*lines[:start], *replacement.splitlines(), *lines[end:]]).rstrip()
+        + "\n"
+    )
 
 
 @dataclass
@@ -513,7 +534,9 @@ def _upload_files(
             repo_type=_REPO_TYPE,
             commit_message=commit_message,
         )
-        uploaded.append(PublishFile(local_path=item.local_path, repo_path=item.repo_path, url=url))
+        uploaded.append(
+            PublishFile(local_path=item.local_path, repo_path=item.repo_path, url=url)
+        )
         logger.info("uploaded %s -> %s", item.repo_path, url)
     return tuple(uploaded)
 
@@ -561,7 +584,9 @@ def publish_dataset(
     uploads.append(PublishFile(local_path=card_local, repo_path=_CARD_NAME))
 
     if dry_run:
-        logger.info("dry run: would upload %d files to %s", len(uploads), normalized_repo_id)
+        logger.info(
+            "dry run: would upload %d files to %s", len(uploads), normalized_repo_id
+        )
         return PublishResult(
             repo_id=normalized_repo_id,
             private=private,

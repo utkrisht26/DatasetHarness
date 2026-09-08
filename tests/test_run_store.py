@@ -86,7 +86,10 @@ def test_store_list_is_newest_first_and_skips_junk(tmp_path, minimal_spec_dict):
     listed = store.list()
     assert [r.run_id for r in listed] == [second.run_id, first.run_id] or [
         r.run_id for r in listed
-    ] == [first.run_id, second.run_id]  # same-timestamp ties are order-stable enough
+    ] == [
+        first.run_id,
+        second.run_id,
+    ]  # same-timestamp ties are order-stable enough
     assert len(listed) == 2
 
 
@@ -104,7 +107,10 @@ def test_store_list_reports_dir_name_as_run_id(tmp_path, minimal_spec_dict):
     work.mkdir()
     save_spec(work, spec)
     save_record(
-        work, new_record(run_id="rust-async-macro-patterns", job_id="rust-async-macro-patterns")
+        work,
+        new_record(
+            run_id="rust-async-macro-patterns", job_id="rust-async-macro-patterns"
+        ),
     )
 
     store = RunStore(tmp_path)
