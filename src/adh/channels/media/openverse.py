@@ -10,10 +10,11 @@ change this adapter's shape.
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
+
+from adh.settings import get_settings
 
 from .provider import MediaHit
 
@@ -81,7 +82,7 @@ class OpenverseImageProvider:
     @classmethod
     def from_env(cls) -> "OpenverseImageProvider":
         """Keyless by default; ``OPENVERSE_API_KEY`` raises the rate limits."""
-        return cls(api_key=os.environ.get("OPENVERSE_API_KEY") or None)
+        return cls(api_key=get_settings().openverse_api_key_value)
 
     def _client_for_call(self):
         if self._client is None:

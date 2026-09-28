@@ -26,14 +26,16 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Annotated, Callable
 
-from fastapi import APIRouter, HTTPException, Path as PathParameter
+from fastapi import APIRouter, HTTPException, Path as PathParameter, Query
 from pydantic import BaseModel, ConfigDict, Field
 
-from adh.contract import JobSpec
+from adh.contract import JobSpec, JobSpecError, check_job_spec
 from adh.discovery import ApprovalDecision, AutoApprover, DiscoveryAgent, FetchPlan
 from adh.generation import Generator
 from adh.llm import UsageTracker
@@ -91,6 +93,11 @@ class RunsService:
 
     def list(self) -> list[RunRecord]:
         return self.store.list()
+
+    def events(self, run_id: str, *, after_sequence: int = 0, limit: int = 200) -> list[dict]:
+        if self.store.get(run_id) is None:
+            raise KeyError(run_id)
+        return self.store.load_events(run_id, after_sequence=after_sequence, limit=limit)
 
     # ------------------------------------------------------------------ actions
     def submit(self, spec: JobSpec) -> RunRecord:
@@ -168,6 +175,10 @@ class RunsService:
                 raise RunConflictError(
                     f"run {run_id!r} is {record.status.value!r}; only a succeeded run can be built"
                 )
+            spec = self.store.load_spec(run_id)
+            if spec is None:
+                raise JobSpecError("cannot build: spec.json missing")
+            check_job_spec(spec).raise_if_errors()
             record = self.store.set_status(run_id, RunStatus.BUILDING)
         self._executor.submit(self._build_dataset, run_id)
         return record
@@ -213,6 +224,16 @@ class RunsService:
             self.store.set_status(run_id, RunStatus.FAILED, error="spec.json missing")
             return
         usage = UsageTracker()
+        telemetry = self.store.telemetry(run_id)
+        worker_operation = uuid.uuid4().hex
+        worker_started = time.perf_counter()
+        telemetry.emit(
+            "discovery",
+            "worker.started",
+            status="started",
+            operation_id=worker_operation,
+            attributes={"job_id": spec.job_id or spec.name},
+        )
         logger.info("run %s: discovery starting (job=%s)", run_id, spec.job_id or spec.name)
         try:
             # inside the try: a raising agent factory (bad key, provider down) must
@@ -223,8 +244,32 @@ class RunsService:
             logger.exception(
                 "run %s: discovery failed after %d token(s)", run_id, usage.total.total_tokens
             )
+            telemetry.emit(
+                "discovery",
+                "worker.failed",
+                status="failed",
+                operation_id=worker_operation,
+                duration_ms=(time.perf_counter() - worker_started) * 1_000,
+                attributes={
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "llm": usage.to_dict(),
+                },
+            )
             self.store.set_status(run_id, RunStatus.FAILED, error=str(exc))
             return
+        telemetry.emit(
+            "discovery",
+            "worker.completed",
+            status="succeeded",
+            operation_id=worker_operation,
+            duration_ms=(time.perf_counter() - worker_started) * 1_000,
+            attributes={
+                "sources": len(planned.plan.sources),
+                "run_status": planned.record.status.value,
+                "llm": usage.to_dict(),
+            },
+        )
         logger.info(
             "run %s: discovery done — %d source(s), status=%s, %d token(s)",
             run_id,
@@ -283,13 +328,22 @@ class RunsService:
         usage = UsageTracker()
         logger.info("run %s: dataset build starting (job=%s)", run_id, spec.job_id or spec.name)
         try:
-            result = run_engine_b(
-                spec,
-                work_dir=self.store.run_dir(run_id),
-                generator=self._eb_generator,
-                judge=self._eb_judge,
-                usage=usage,
-            )
+            attributes: dict = {"job_id": spec.job_id or spec.name}
+            with self.store.telemetry(run_id).span("build", "phase", attributes=attributes):
+                result = run_engine_b(
+                    spec,
+                    work_dir=self.store.run_dir(run_id),
+                    generator=self._eb_generator,
+                    judge=self._eb_judge,
+                    usage=usage,
+                )
+                attributes.update(
+                    {
+                        "records": result.n_records,
+                        "exit_reason": result.exit_reason,
+                        "llm": usage.to_dict(),
+                    }
+                )
         except Exception as exc:  # noqa: BLE001 - a failed build must not kill the worker
             logger.exception(
                 "run %s: dataset build failed after %d token(s)", run_id, usage.total.total_tokens
@@ -405,6 +459,22 @@ class RunOut(RunSummaryOut):
     notes: list[str] = Field(default_factory=list)
 
 
+class TelemetryEventOut(BaseModel):
+    schema_version: int
+    sequence: int
+    event_id: str
+    timestamp: str
+    run_id: str
+    job_id: str | None = None
+    phase: str
+    event: str
+    status: str
+    operation_id: str | None = None
+    parent_operation_id: str | None = None
+    duration_ms: float | None = None
+    attributes: dict = Field(default_factory=dict)
+
+
 def _summary(record: RunRecord) -> RunSummaryOut:
     return RunSummaryOut(
         run_id=record.run_id,
@@ -481,6 +551,21 @@ def build_runs_router(runs: RunsService) -> APIRouter:
             notes=list(state.notes),
         )
 
+    @router.get("/{run_id}/events")
+    def get_run_events(
+        run_id: RunIdPath,
+        after: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=1_000)] = 200,
+    ) -> list[TelemetryEventOut]:
+        """Ordered, durable execution events; ``after`` supports live polling."""
+        try:
+            return [
+                TelemetryEventOut.model_validate(event)
+                for event in runs.events(run_id, after_sequence=after, limit=limit)
+            ]
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"unknown run {run_id!r}") from None
+
     @router.post("/{run_id}/approve")
     def approve_run(run_id: RunIdPath, body: ApprovalRequest) -> RunSummaryOut:
         if runs.get(run_id) is None:
@@ -551,6 +636,8 @@ def build_runs_router(runs: RunsService) -> APIRouter:
             raise HTTPException(status_code=404, detail=f"unknown run {run_id!r}") from None
         except RunConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from None
+        except JobSpecError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
 
     @router.get("/{run_id}/dataset")
     def get_dataset(run_id: RunIdPath) -> dict:

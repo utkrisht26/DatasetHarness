@@ -14,6 +14,7 @@ dependencies = [
     { name = "jsonschema" },
     { name = "langchain-openrouter" },
     { name = "pydantic" },
+    { name = "python-dotenv" },
     { name = "pyyaml" },
 ]
 
@@ -124,6 +125,7 @@ requires-dist = [
     { name = "presidio-anonymizer", marker = "extra == 'pii'", specifier = ">=2.2" },
     { name = "pyarrow", marker = "extra == 'deliver'", specifier = ">=16" },
     { name = "pydantic", specifier = ">=2.7" },
+    { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rank-bm25", marker = "extra == 'web'", specifier = ">=0.2" },
     { name = "sentence-transformers", marker = "extra == 'evals'", specifier = ">=2.7" },

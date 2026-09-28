@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from collections import Counter
 from pathlib import Path
 
 from adh.contract import JobSpec, SourceChannel
@@ -15,6 +16,7 @@ from adh.discovery import (
     apply_decision,
     render_plan,
 )
+from adh.discovery.agent import DiscoveryConfig
 from adh.discovery.models import FetchPlan
 from adh.search import (
     DatasetHit,
@@ -108,6 +110,45 @@ def test_web_fallback_when_no_dataset(minimal_spec_dict):
     plan = agent.discover(make_spec(minimal_spec_dict), DUMMY_PATH)
     assert plan.sources
     assert all(s.channel == SourceChannel.WEB for s in plan.sources)
+
+
+def test_fallback_caps_candidates_per_aspect_after_all_queries(minimal_spec_dict):
+    class RotatingSearch:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def search(self, query: str, *, limit: int = 10) -> list[SearchHit]:
+            start = self.calls * limit
+            self.calls += 1
+            return [
+                SearchHit(
+                    url=f"https://docs.example.test/page-{start + index}",
+                    title=f"Rust async macro guide {start + index}",
+                    snippet=(
+                        "rust async macro declarative procedural question answering "
+                        "examples input output patterns"
+                    ),
+                    published="2025-01-01",
+                    license_hint="MIT",
+                )
+                for index in range(limit)
+            ]
+
+    search = RotatingSearch()
+    agent = SourceDiscoveryAgent(
+        registry=InMemoryDatasetRegistry(),
+        search=search,
+        config=DiscoveryConfig(max_candidates_per_aspect=3),
+    )
+    plan = agent.discover(
+        make_spec(minimal_spec_dict, channels=["web"]),
+        DUMMY_PATH,
+    )
+
+    counts = Counter(source.candidate.aspect_id for source in plan.sources)
+    assert search.calls > len(plan.aspects)
+    assert counts
+    assert max(counts.values()) <= 3
 
 
 def test_synthesis_when_no_external_source(minimal_spec_dict):

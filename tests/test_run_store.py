@@ -16,6 +16,7 @@ from adh.orchestration.run_store import (
     save_record,
     save_spec,
 )
+from adh.telemetry import read_telemetry
 
 
 def _spec(minimal_spec_dict) -> JobSpec:
@@ -76,6 +77,12 @@ def test_store_set_status_updates_reason_and_error(tmp_path, minimal_spec_dict):
     assert updated.exit_reason == "max_llm_tokens"
     assert updated.error == "boom"
     assert store.get(record.run_id) == updated
+    events = read_telemetry(store.run_dir(record.run_id))
+    assert [event["event"] for event in events] == [
+        "run.created",
+        "run.status_changed",
+    ]
+    assert events[-1]["attributes"]["to"] == "failed"
 
 
 def test_store_list_is_newest_first_and_skips_junk(tmp_path, minimal_spec_dict):

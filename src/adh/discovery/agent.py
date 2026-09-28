@@ -4,8 +4,8 @@ Given only a goal + record shape (NO sources), answer "where does this data live
 as a research loop over the search and registry ports:
 
     1. Decompose the goal into aspects.
-    2. Route each aspect by channel: datasets (reuse) > web (crawl) > synthesis.
-    3. Generate diverse queries, run search + registry lookups, collect candidates.
+    2. Generate and persist the complete, channel-scoped search plan.
+    3. Route each aspect and execute the planned queries: datasets > web > synthesis.
     4. Evaluate each candidate against the spec (shape / quality / license / freshness / yield).
     5. Rank + dedupe -> a FetchPlan.
 
@@ -15,6 +15,7 @@ The approval gate and coverage-gap re-discovery live in sibling modules.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -37,6 +38,7 @@ from adh.search import (
     SearchHit,
     SearchProvider,
 )
+from adh.telemetry import current_telemetry
 
 from .models import Aspect, CandidateSource, FetchPlan, RankedSource, SourceEvaluation
 
@@ -104,11 +106,17 @@ class SourceDiscoveryAgent:
             return self._fixed_plan(spec, job_id, notes)
 
         aspects = self._aspects(spec)
+        query_plan = self._query_plan(aspects)
+        self._persist_search_plan(spec, work_dir, aspects, query_plan)
         ranked: list[RankedSource] = []
         synthesis_aspects: list[Aspect] = []
 
         for aspect in aspects:
-            channel, sources = self._route_aspect(aspect, spec)
+            channel, sources = self._route_aspect(
+                aspect,
+                spec,
+                queries=query_plan[aspect.aspect_id],
+            )
             if channel == SourceChannel.SYNTHESIS:
                 synthesis_aspects.append(aspect)
                 notes.append(f"aspect {aspect.aspect_id!r} routed to synthesis (model-known)")
@@ -174,6 +182,68 @@ class SourceDiscoveryAgent:
     def _target_shape(spec: JobSpec) -> str:
         return target_shape(spec)
 
+    def _query_plan(self, aspects: list[Aspect]) -> dict[str, tuple[str, ...]]:
+        """Generate every aspect query before any provider is called."""
+        plan: dict[str, tuple[str, ...]] = {}
+        for aspect in aspects:
+            draft = AspectDraft(aspect.topic, aspect.rationale, aspect.keywords)
+            queries = self.llm.queries(draft, n=self.config.queries_per_aspect)
+            plan[aspect.aspect_id] = tuple(dict.fromkeys(q.strip() for q in queries if q.strip()))
+        return plan
+
+    @staticmethod
+    def _persist_search_plan(
+        spec: JobSpec,
+        work_dir: Path,
+        aspects: list[Aspect],
+        query_plan: dict[str, tuple[str, ...]],
+    ) -> None:
+        """Persist the heuristic agent's plan when running inside an observable job."""
+        telemetry = current_telemetry()
+        if telemetry is None:
+            return
+
+        enabled = set(spec.discovery.channels)
+        searchable = enabled & {
+            SourceChannel.DATASETS,
+            SourceChannel.WEB,
+            SourceChannel.MEDIA,
+        }
+        all_queries = list(
+            dict.fromkeys(query for queries in query_plan.values() for query in queries)
+        )
+        queries = {
+            channel.value: all_queries if channel in searchable else []
+            for channel in (SourceChannel.DATASETS, SourceChannel.WEB, SourceChannel.MEDIA)
+        }
+        payload = {
+            "agent": "heuristic-agent",
+            "aspects": [
+                {
+                    "aspect_id": aspect.aspect_id,
+                    "topic": aspect.topic,
+                    "queries": list(query_plan[aspect.aspect_id]),
+                }
+                for aspect in aspects
+            ],
+            "queries": queries,
+            "rationale": "deterministic fallback plan generated before provider search",
+            "allowed_channels": sorted(channel.value for channel in enabled),
+        }
+        research_dir = Path(work_dir) / "research"
+        research_dir.mkdir(parents=True, exist_ok=True)
+        primary_path = research_dir / "search_plan.json"
+        path = research_dir / "search_plan_fallback.json" if primary_path.exists() else primary_path
+        attributes = {
+            "artifact": str(path.relative_to(work_dir)),
+            "aspects": len(aspects),
+            "queries": len(all_queries),
+            "channels": sorted(channel.value for channel in enabled),
+        }
+        with telemetry.span("planning", "search_plan", attributes=attributes):
+            with path.open("w", encoding="utf-8") as stream:
+                json.dump(payload, stream, indent=2)
+
     # ------------------------------------------------------------------ routing
     def _route_aspect(
         self,
@@ -181,6 +251,7 @@ class SourceDiscoveryAgent:
         spec: JobSpec,
         *,
         exclude_locators: set[str] | None = None,
+        queries: tuple[str, ...] | None = None,
     ) -> tuple[SourceChannel, list[RankedSource]]:
         """Route one aspect to a channel and return its evaluated sources.
 
@@ -189,6 +260,11 @@ class SourceDiscoveryAgent:
         channels = spec.discovery.channels
         exclude = exclude_locators or set()
         draft = AspectDraft(aspect.topic, aspect.rationale, aspect.keywords)
+        planned_queries = (
+            queries
+            if queries is not None
+            else tuple(self.llm.queries(draft, n=self.config.queries_per_aspect))
+        )
 
         # 0) media channel (media modalities: video/image): real assets, before
         #    any text path. Without a configured provider this reports a loud gap
@@ -196,33 +272,33 @@ class SourceDiscoveryAgent:
         #    failure mode).
         if is_media_modality(spec.modality) and SourceChannel.MEDIA in channels:
             if self.media_provider is not None:
-                media = self._media_for(aspect, draft, spec, exclude)
+                media = self._media_for(aspect, draft, spec, exclude, planned_queries)
                 passing = [
                     s
                     for s in media
                     if s.evaluation.shape_match >= self.config.media_shape_threshold
                 ]
                 if passing:
-                    return SourceChannel.MEDIA, passing
+                    return SourceChannel.MEDIA, self._rank_and_limit(passing)
             return SourceChannel.MEDIA, []
 
         # 1) datasets channel (reuse first)
         if SourceChannel.DATASETS in channels:
-            ds = self._datasets_for(aspect, draft, spec, exclude)
+            ds = self._datasets_for(aspect, draft, spec, exclude, planned_queries)
             passing = [
                 s for s in ds if s.evaluation.shape_match >= self.config.dataset_shape_threshold
             ]
             if passing:
-                return SourceChannel.DATASETS, passing
+                return SourceChannel.DATASETS, self._rank_and_limit(passing)
 
         # 2) web channel (crawl when no ready dataset)
         if SourceChannel.WEB in channels:
-            web = self._web_for(aspect, draft, spec, exclude)
+            web = self._web_for(aspect, draft, spec, exclude, planned_queries)
             passing = [
                 s for s in web if s.evaluation.shape_match >= self.config.web_shape_threshold
             ]
             if passing:
-                return SourceChannel.WEB, passing
+                return SourceChannel.WEB, self._rank_and_limit(passing)
 
         # 3) synthesis (model already knows the domain)
         if SourceChannel.SYNTHESIS in channels and self.llm.domain_is_model_known(draft):
@@ -231,10 +307,15 @@ class SourceDiscoveryAgent:
         return SourceChannel.WEB, []  # nothing viable
 
     def _datasets_for(
-        self, aspect: Aspect, draft: AspectDraft, spec: JobSpec, exclude: set[str]
+        self,
+        aspect: Aspect,
+        draft: AspectDraft,
+        spec: JobSpec,
+        exclude: set[str],
+        queries: tuple[str, ...],
     ) -> list[RankedSource]:
         out: list[RankedSource] = []
-        for query in self.llm.queries(draft, n=self.config.queries_per_aspect):
+        for query in queries:
             for hit in self.registry.search(query, limit=self.config.max_candidates_per_aspect):
                 if hit.locator in exclude:
                     continue
@@ -254,10 +335,15 @@ class SourceDiscoveryAgent:
         return out
 
     def _web_for(
-        self, aspect: Aspect, draft: AspectDraft, spec: JobSpec, exclude: set[str]
+        self,
+        aspect: Aspect,
+        draft: AspectDraft,
+        spec: JobSpec,
+        exclude: set[str],
+        queries: tuple[str, ...],
     ) -> list[RankedSource]:
         out: list[RankedSource] = []
-        for query in self.llm.queries(draft, n=self.config.queries_per_aspect):
+        for query in queries:
             for hit in self.search.search(query, limit=self.config.max_candidates_per_aspect):
                 if hit.url in exclude or not self._domain_allowed(hit.url, spec):
                     continue
@@ -276,14 +362,19 @@ class SourceDiscoveryAgent:
         return out
 
     def _media_for(
-        self, aspect: Aspect, draft: AspectDraft, spec: JobSpec, exclude: set[str]
+        self,
+        aspect: Aspect,
+        draft: AspectDraft,
+        spec: JobSpec,
+        exclude: set[str],
+        queries: tuple[str, ...],
     ) -> list[RankedSource]:
         """Media-asset candidates; locator = search query (the channel re-searches)."""
         assert self.media_provider is not None  # guarded by the routing branch
         wanted = resolved_media_types(spec.modality, constraints=spec.discovery.constraints)
         out: list[RankedSource] = []
         seen_ids: set[str] = set()
-        for query in self.llm.queries(draft, n=self.config.queries_per_aspect):
+        for query in queries:
             for hit in self.media_provider.search(
                 query,
                 limit=self.config.max_candidates_per_aspect,
@@ -357,6 +448,11 @@ class SourceDiscoveryAgent:
     # ------------------------------------------------------------------ rank
     def _dedupe_and_rank(self, sources: list[RankedSource]) -> list[RankedSource]:
         return dedupe_and_rank(sources)
+
+    def _rank_and_limit(self, sources: list[RankedSource]) -> list[RankedSource]:
+        """Keep the best unique candidates within the per-aspect search budget."""
+        limit = max(self.config.max_candidates_per_aspect, 0)
+        return self._dedupe_and_rank(sources)[:limit]
 
     # ------------------------------------------------------------------ fixed
     def _fixed_plan(self, spec: JobSpec, job_id: str, notes: list[str]) -> FetchPlan:

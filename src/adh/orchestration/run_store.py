@@ -9,6 +9,7 @@ restart, and resume without holding a thread:
       spec.json      <- the submitted JobSpec
       plan.json      <- the discovered FetchPlan (persisted before the pause)
       state.json     <- acquisition checkpoint (state.py)
+      telemetry.jsonl <- ordered, redacted execution trace
       manifest.jsonl / lineage.json / run_summary.json  <- engine artifacts
 
 The module-level functions operate on one run dir (the engine uses these);
@@ -29,6 +30,7 @@ from pathlib import Path
 
 from adh.contract import JobSpec
 from adh.discovery import FetchPlan
+from adh.telemetry import TelemetryRecorder, read_telemetry
 
 from .state import atomic_write_text
 
@@ -141,8 +143,29 @@ def new_record(run_id: str, job_id: str) -> RunRecord:
 def save_record(work_dir: Path | str, record: RunRecord) -> RunRecord:
     work = Path(work_dir)
     work.mkdir(parents=True, exist_ok=True)
+    previous = load_record(work)
     stamped = replace(record, updated_at=utcnow_iso())
     atomic_write_text(work / RUN_FILE, json.dumps(stamped.to_dict(), indent=2))
+    telemetry = TelemetryRecorder(work, stamped.run_id, job_id=stamped.job_id)
+    if previous is None:
+        telemetry.emit(
+            "run",
+            "run.created",
+            status="started",
+            attributes={"status": stamped.status.value},
+        )
+    elif previous.status is not stamped.status:
+        telemetry.emit(
+            "run",
+            "run.status_changed",
+            status="info",
+            attributes={
+                "from": previous.status.value,
+                "to": stamped.status.value,
+                "exit_reason": stamped.exit_reason,
+                "error": stamped.error,
+            },
+        )
     return stamped
 
 
@@ -229,6 +252,17 @@ class RunStore:
 
     def load_plan(self, run_id: str) -> FetchPlan | None:
         return load_plan(self.run_dir(run_id))
+
+    def telemetry(self, run_id: str) -> TelemetryRecorder:
+        record = self.get(run_id)
+        if record is None:
+            raise FileNotFoundError(f"no run record for {run_id!r} under {self.base_dir}")
+        return TelemetryRecorder(self.run_dir(run_id), run_id, job_id=record.job_id)
+
+    def load_events(self, run_id: str, *, after_sequence: int = 0, limit: int = 200) -> list[dict]:
+        if self.get(run_id) is None:
+            raise FileNotFoundError(f"no run record for {run_id!r} under {self.base_dir}")
+        return read_telemetry(self.run_dir(run_id), after_sequence=after_sequence, limit=limit)
 
     def list(self) -> list[RunRecord]:
         """All runs under the base dir, newest first (by created_at).

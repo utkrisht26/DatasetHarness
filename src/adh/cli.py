@@ -16,11 +16,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
-
-import dotenv
 
 from adh.contract import check_job_spec, load_job_spec
 from adh.delivery import (
@@ -31,7 +28,7 @@ from adh.delivery import (
     evaluate_dataset,
     publish_dataset,
 )
-from adh.llm import DEFAULT_CHAT_MODEL, UsageTracker
+from adh.llm import UsageTracker
 from adh.logconfig import configure_logging
 from adh.discovery import (
     ApprovalDecision,
@@ -43,6 +40,7 @@ from adh.generation import HeuristicGenerator
 from adh.orchestration import run_coverage_loop, run_engine_a, run_engine_b
 from adh.verification import HeuristicJudge
 from adh.runtime import live_agent_factory, live_channels
+from adh.settings import DISCOVERY_MODEL_ENV, get_settings, load_dotenv_file
 
 
 def _interactive_decision(plan) -> ApprovalDecision:
@@ -283,7 +281,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
-    api_key = os.environ.get(API_KEY_ENV)
+    api_key = get_settings().service_api_key_value
     if (
         not api_key
         and not is_loopback_host(args.host)
@@ -422,6 +420,7 @@ def _cmd_loop(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    default_discovery_model = get_settings().discovery_model
     parser = argparse.ArgumentParser(
         prog="adh",
         description="Agentic Dataset Harness — Engine A (discover+acquire) + Engine B (synthesize+curate)",
@@ -441,8 +440,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_disc.add_argument("spec")
     p_disc.add_argument(
         "--discovery-model",
-        default=DEFAULT_CHAT_MODEL,
-        help=f"chat model id for deep discovery (default: {DEFAULT_CHAT_MODEL})",
+        default=default_discovery_model,
+        help=(
+            "chat model id for deep discovery "
+            f"(default: {default_discovery_model}; ${DISCOVERY_MODEL_ENV})"
+        ),
     )
     p_disc.add_argument(
         "--no-llm",
@@ -459,8 +461,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--fresh", action="store_true", help="ignore prior state (no resume)")
     p_run.add_argument(
         "--discovery-model",
-        default=DEFAULT_CHAT_MODEL,
-        help=f"chat model id for deep discovery (default: {DEFAULT_CHAT_MODEL})",
+        default=default_discovery_model,
+        help=(
+            "chat model id for deep discovery "
+            f"(default: {default_discovery_model}; ${DISCOVERY_MODEL_ENV})"
+        ),
     )
     p_run.add_argument(
         "--no-llm",
@@ -507,6 +512,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_loop.add_argument("--autonomous", action="store_true", help="run without the approval gate")
     # no --fresh here on purpose: the loop always resumes durable state (that
     # continuity is its whole point); use `adh run --fresh` to restart Engine A.
+    p_loop.add_argument(
+        "--discovery-model",
+        default=default_discovery_model,
+        help=(
+            "chat model id for deep discovery "
+            f"(default: {default_discovery_model}; ${DISCOVERY_MODEL_ENV})"
+        ),
+    )
     p_loop.add_argument(
         "--no-llm",
         action="store_true",
@@ -571,8 +584,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_serve.add_argument(
         "--discovery-model",
-        default=DEFAULT_CHAT_MODEL,
-        help=f"chat model id for deep discovery (default: {DEFAULT_CHAT_MODEL})",
+        default=default_discovery_model,
+        help=(
+            "chat model id for deep discovery "
+            f"(default: {default_discovery_model}; ${DISCOVERY_MODEL_ENV})"
+        ),
     )
     p_serve.add_argument(
         "--no-llm",
@@ -596,7 +612,7 @@ def main(argv: list[str] | None = None) -> int:
     # Load the repo .env here, not at import time: an import must have no side
     # effects (importing adh.cli from tests or tools otherwise silently injects
     # real API keys into os.environ for the whole process).
-    dotenv.load_dotenv()
+    load_dotenv_file()
     parser = build_parser()
     args = parser.parse_args(argv)
     # Install the stderr trace before dispatch so discovery/acquisition/build all

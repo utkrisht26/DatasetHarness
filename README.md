@@ -36,12 +36,49 @@ deduplicated, verified, training-ready dataset** with full provenance — at sca
 
 ```bash
 uv sync
+cp .env.example .env                              # optional deployment settings
 uv run pytest -q                                   # 600+ tests
 uv run python examples/demo_offline.py             # end-to-end Engine A + Engine B, offline
 uv run adh discover examples/rust_async_macros.yaml
 uv run adh run examples/rust_async_macros.yaml --autonomous --no-fetch
 uv run adh serve -v                                # gateway (+ verbose step trace)
 ```
+
+### Configuration
+
+Application settings are defined and validated in [`src/adh/settings.py`](./src/adh/settings.py).
+Copy [`.env.example`](./.env.example) to `.env` for local configuration; `.env` is intentionally
+gitignored and is loaded only by the CLI, so importing `adh` never injects secrets or changes the
+process environment.
+
+The main settings are:
+
+| Variable | Purpose |
+|----------|---------|
+| `ADH_DISCOVERY_MODEL` | Default deep-discovery model; `--discovery-model` wins. |
+| `ADH_LLM_BASE_URL`, `ADH_LLM_API_KEY` | Optional OpenAI-compatible model gateway. |
+| `ADH_GENERATOR_MODELS`, `ADH_JUDGE_MODELS` | Comma-separated Engine B model overrides. |
+| `TAVILY_API_KEY`, `PEXELS_API_KEY`, `OPENVERSE_API_KEY` | Discovery/media providers. |
+| `ADH_API_KEY`, `ADH_CORS_ORIGINS` | Gateway authentication and allowed browser origins. |
+| `ADH_LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
+
+Provider-native credentials such as `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` continue to be read
+by their SDKs. Job-specific settings—including discovery policy, model ladders, limits, schemas,
+and delivery—remain in the Job Spec YAML.
+
+Engine B validates the saved spec before starting generation. `record_schema_ref` must point
+to a local JSON Schema file; a vocabulary URL such as `http://schema.org/Text` is not supported.
+Tier 1 requires an `x-verifier` hook in that schema. Descriptive text input/output records can
+use `./schemas/qa_record.schema.json`, Tier 2, and a `judge_config` with models from at least
+two distinct families. These settings determine verification guarantees; builds never switch
+tiers automatically. Invalid build configurations return HTTP 422 before queuing a worker.
+Rejected candidates are logged with their reason, and a bounded sample of distinct reasons
+is retained in `engine_b_summary.json` notes.
+
+After correcting a spec for a build that already exhausted its seeds, use
+`adh build examples/corrected-spec.yaml --work-dir runs/<run-id> --fresh` to regenerate from
+the existing corpus. This resets Engine B's generation checkpoints; it does not repeat discovery
+or crawling. Back up any previous dataset output before rebuilding it.
 
 ### Development checks
 
@@ -141,9 +178,13 @@ its own process later is a config flip, not an API change.
 
 | Route | What it does |
 |-------|--------------|
+| `GET /api/specs/schema` | Job Spec JSON Schema, editable defaults, bundled record profiles, and deployment model overrides. |
+| `POST /api/specs/validate` | Validate `{ "spec": {...} }` against the contract and local schema/verification requirements; returns field errors, warnings, and normalized YAML. |
+| `POST /api/specs/import` | Parse `{ "yaml_text": "..." }` safely; retain an invalid draft for repair and export only valid specs. |
 | `POST /api/runs` | Submit a Job Spec → discovery on a worker → parks at `AWAITING_APPROVAL` (autonomous specs auto-approve inline). |
 | `POST /api/runs/{id}/approve` · `/cancel` | Drive the run state machine over the durable [`RunStore`](./src/adh/orchestration/run_store.py). |
 | `GET /api/runs` · `/api/runs/{id}` | List / inspect runs, ranked plan, and per-run metrics (pages, tokens, cost). |
+| `GET /api/runs/{id}/events` | Read the ordered execution trace; poll with `?after=<sequence>&limit=200`. |
 | `/api/crawl/*` | The standalone crawl microservice (submit/monitor/inspect extracted pages) over the Crawl4AI web channel. |
 | `/api/healthz` | Liveness + crawl job counts. |
 
@@ -152,6 +193,35 @@ so every deepagents model call folds into that run's metrics. Everything is inje
 offline tests — the defaults wire the live stack when the extras are installed. The
 operator console that consumes this surface is specced in [`DESIGN.md`](./DESIGN.md) and
 [`docs/design/`](./docs/design).
+
+### Job Spec Builder
+
+Open `/spec` in the console from `../adh-frontend`. The same editor powers
+`/discovery/new` and `/runs/{id}/edit`. It exposes the full Job Spec: goal and record
+shape, verification, source constraints, licenses, generation, delivery, and budgets.
+Client validation uses the server's JSON Schema; server validation checks cross-field
+rules and referenced files before a run can be submitted from the builder.
+
+Start with the text, code, image, or video record profile, or import YAML/JSON.
+Text defaults use the bundled QA schema and Tier 2 verification. Tier 1 requires
+a schema with an executable verifier. Schema and evaluation-reference paths resolve
+on the server, not on the browser's filesystem. The form also shows active deployment
+model overrides, which take precedence over the models saved in a spec.
+
+Use **Validate & review**, review any warnings, then **Start discovery**. Validation
+does not call models or start discovery. **Export YAML** downloads the validated,
+normalized spec. **Save draft** / **Restore draft** use browser storage; editing and
+restarting preserves the saved settings and creates a new run.
+
+The browser acceptance tests use the actual gateway with offline discovery and crawl
+doubles. After building `../adh-frontend`, run:
+
+```bash
+ADH_FRONTEND_DIST=../adh-frontend/dist .venv/bin/pytest tests/test_spec_builder_browser.py -o addopts='' -q
+```
+
+These tests require Playwright Chromium. Without `ADH_FRONTEND_DIST`, they are skipped;
+the validation API tests in `tests/test_specs_api.py` always run.
 
 API authentication is enabled when `ADH_API_KEY` is set. Send the value as a bearer token on
 every `/api/*` request; `/api/healthz` remains public for liveness probes. The CLI refuses to bind
@@ -170,7 +240,13 @@ still require an identity provider plus per-run ownership and authorization chec
 ```bash
 uv pip install -e '.[serve]'   # + FastAPI/uvicorn over the web channel
 uv pip install -e '.[all]'     # + Crawl4AI, deepagents, huggingface_hub adapters
+.venv/bin/python -m playwright install chromium  # browser used by Crawl4AI
 ```
+
+Install Chromium once before live web acquisition, and rerun that command after
+upgrading Playwright. Installing the Python packages alone does not install the
+matching browser executable. A `BrowserType.launch: Executable doesn't exist`
+error means acquisition cannot open pages, even when discovery found sources.
 
 ## Observability
 
@@ -188,7 +264,65 @@ ADH_LOG_LEVEL=debug uv run adh …   # or set the level via the environment
 The deepagents discovery loop is fully traced — no more silent 40k-token black box.
 Each run emits, per model call, a running token total; each tool call and subagent
 step; and, on failure, the **full traceback plus the tokens spent at the point of
-failure** (then it degrades to the heuristic agent rather than killing the run):
+failure** (then it degrades to the heuristic agent rather than killing the run).
+Discovery follows a strict sequence: create and persist a search plan, execute only
+the enabled channel tools, save the ranked fetch plan, then acquire/crawl. The search
+plan is available at `<runs-dir>/<run-id>/research/search_plan.json`; if deep discovery
+fails after planning, the heuristic recovery plan is saved separately as
+`search_plan_fallback.json`. A disabled channel is omitted from the agent's tool set,
+so disabling `datasets` prevents dataset registry calls instead of merely filtering
+their results afterward.
+
+The fetch plan pauses at `AWAITING_APPROVAL` before acquisition when
+`discovery.approval_gate: true`. Set it to `false` only when the run should auto-approve
+the completed fetch plan and start crawling immediately.
+
+The same information is persisted as redacted JSON Lines in
+`<runs-dir>/<run-id>/telemetry.jsonl`; query it while a run is active without reading
+server logs:
+
+```bash
+curl "http://127.0.0.1:8000/api/runs/<run-id>/events?after=0&limit=200"
+```
+
+Discovery also records complete model responses for parsing diagnostics:
+`model.response.raw` contains the OpenAI-compatible HTTP response before SDK/tool
+parsing, and `model.response.parsed` contains the full LangChain result, including
+`tool_calls`, `invalid_tool_calls`, content, finish reasons, and usage metadata.
+Match their `operation_id` to `model.started`/`model.completed` to compare the
+provider's `function.arguments` string with the parsed arguments. These response
+events bypass ordinary telemetry size caps while retaining credential redaction,
+and the same full payloads appear in DEBUG server logs (`adh serve -v`). Capture
+starts on new model calls; previous runs cannot be reconstructed from token counts.
+Raw HTTP capture currently covers non-streaming OpenAI-compatible SDK clients.
+Streaming responses record an explicit raw-capture skip and retain the assembled
+parsed response; other adapters retain the parsed response.
+
+Every event has a sequence, timestamp, phase, operation/parent IDs, status, duration,
+and bounded attributes. Common credential fields and bearer/API-key values are redacted
+before they reach disk. The no-progress guard evaluates completed research batches,
+so a parallel batch with any successful search counts as progress regardless of
+completion order. Three consecutive unproductive batches trigger fallback; if
+nonempty result files remain unread, a `guard.review_pending` event grants one
+additional window of up to three unproductive batches to review them first.
+Reading a new nonempty results file resets the counter; rereading an already
+reviewed file does not. `research.batch.completed` records each batch's progress.
+The agent receives a prioritized list of unread, nonempty files before each model
+turn. Empty files need not be read, and unchanged zero-result queries are skipped
+without another provider request. Search plans must contain at least one aspect.
+Final reports must explicitly supply both `aspects` and `sources`; a missing
+source list is a validation error, not an empty discovery result. Topic labels
+are limited to 500 characters to reject reports accidentally embedded in a
+string. `report.rejected` records validation failures. The model gets two
+correction retries in the same research conversation before heuristic fallback.
+An explicit `sources: []` is accepted only after at least one completed search in
+each allowed external channel, review of nonempty results, and an explanation in
+`notes`. Blocked/failed calls and plan submission do not count as searches. A
+report routing every aspect to allowed synthesis may omit external research.
+Premature empty reports receive concrete search/review feedback in the same
+conversation, sharing the two-retry limit with schema errors. `report.rejected`
+distinguishes these completion failures from schema errors with its `kind` field.
+The stderr view remains concise:
 
 ```text
 deep-agent starting: job=rust-async goal='Rust async macros…' channels=datasets,web,synthesis recursion_limit=50

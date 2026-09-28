@@ -15,6 +15,7 @@ from .approval import (
 from .deep_agent import (
     DeepAgentDiscoveryAgent,
     DiscoveryAgentError,
+    DiscoveryNoProgress,
     DiscoveryReport,
     FallbackDiscoveryAgent,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "DeepAgentDiscoveryAgent",
     "FallbackDiscoveryAgent",
     "DiscoveryAgentError",
+    "DiscoveryNoProgress",
     "DiscoveryReport",
     "DiscoveryConfig",
     "Aspect",

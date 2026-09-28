@@ -17,9 +17,10 @@ default lazily imports the optional ``tavily`` package.
 from __future__ import annotations
 
 import logging
-import os
 import threading
 from typing import Callable
+
+from adh.settings import get_settings
 
 from .provider import SearchHit
 
@@ -38,7 +39,7 @@ class TavilySearchProvider:
         api_key: str | None = None,
         client_factory: Callable[[], object] | None = None,
     ) -> None:
-        self.api_key = api_key if api_key is not None else os.environ.get("TAVILY_API_KEY", "")
+        self.api_key = api_key if api_key is not None else get_settings().tavily_api_key_value or ""
         # An injected factory stands in for the whole client (tests, proxies), so
         # searches work through it even with no local key configured.
         self._client_factory = client_factory or self._build_default_client

@@ -97,6 +97,14 @@ def test_check_errors_on_bad_schema(minimal_spec_dict, tmp_path):
     assert any("not a valid JSON Schema" in e for e in report.errors)
 
 
+@pytest.mark.parametrize("payload", [None, [], True, False, "schema"])
+def test_check_rejects_non_object_schemas(minimal_spec_dict, tmp_path, payload):
+    (tmp_path / "s.json").write_text(json.dumps(payload), encoding="utf-8")
+    report = check_job_spec(_spec_with_schema(minimal_spec_dict, "s.json"), base_dir=tmp_path)
+    assert not report.ok
+    assert "JSON Schema object" in report.errors[0]
+
+
 def test_load_record_schema_absolute(repo_root):
     schema = load_record_schema(str(repo_root / "schemas" / "qa_record.schema.json"))
     assert schema["title"] == "QA Record"

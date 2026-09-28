@@ -46,6 +46,7 @@ from adh.discovery import (
 )
 from adh.llm import UsageTracker
 from adh.provenance import build_lineage, write_lineage
+from adh.telemetry import TelemetryRecorder, bind_telemetry, current_telemetry
 
 from .limits import CircuitBreaker, RunMetrics
 from .run_store import (
@@ -142,7 +143,18 @@ def plan_run(
     state = load_state(work, job_id) if resume else JobState(job_id=job_id)
 
     # ---- 1.0 discovery (LLM-backed when the agent's provider is; metered) ----
-    plan = agent.discover(spec, work_dir=work)
+    telemetry = current_telemetry() or TelemetryRecorder(work, record.run_id, job_id=job_id)
+    discovery_attributes = {"agent": type(agent).__name__}
+    with bind_telemetry(telemetry):
+        with telemetry.span("discovery", "phase", attributes=discovery_attributes):
+            plan = agent.discover(spec, work_dir=work)
+            discovery_attributes.update(
+                {
+                    "sources": len(plan.sources),
+                    "synthesis_aspects": len(plan.synthesis_aspects),
+                    "llm": usage.to_dict() if usage is not None else None,
+                }
+            )
 
     if usage is not None:
         total = usage.total
@@ -213,20 +225,35 @@ def resume_run(
         raise FileNotFoundError(f"no {work / RUN_FILE} — run plan_run() first")
     record = save_record(work, replace(record, status=RunStatus.ACQUIRING))
 
+    telemetry = current_telemetry() or TelemetryRecorder(work, record.run_id, job_id=record.job_id)
+    acquisition_attributes = {
+        "approved_sources": len(decision.approved_source_ids),
+        "approve_synthesis": decision.approve_synthesis,
+    }
     try:
-        result = _acquire(
-            spec,
-            plan,
-            decision,
-            work=work,
-            channels=channels or {},
-            store=store or LocalCorpusStore(work / "corpus"),
-            resume=resume,
-            max_items_per_source=max_items_per_source,
-            should_cancel=should_cancel,
-            clock_seconds=clock_seconds,
-            wallclock=wallclock,
-        )
+        with bind_telemetry(telemetry):
+            with telemetry.span("acquisition", "phase", attributes=acquisition_attributes):
+                result = _acquire(
+                    spec,
+                    plan,
+                    decision,
+                    work=work,
+                    channels=channels or {},
+                    store=store or LocalCorpusStore(work / "corpus"),
+                    resume=resume,
+                    max_items_per_source=max_items_per_source,
+                    should_cancel=should_cancel,
+                    clock_seconds=clock_seconds,
+                    wallclock=wallclock,
+                )
+                acquisition_attributes.update(
+                    {
+                        "chunks": result.n_chunks,
+                        "handoffs": result.n_handoffs,
+                        "exit_reason": result.exit_reason,
+                        "metrics": result.metrics.to_dict(),
+                    }
+                )
     except Exception as exc:
         save_record(
             work,

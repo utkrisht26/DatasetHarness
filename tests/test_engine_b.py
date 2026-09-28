@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 
+import pytest
 
-from adh.contract import JobSpec
+from adh.contract import JobSpec, JobSpecError
 from adh.generation import HeuristicGenerator
 from adh.orchestration import run_engine_a, run_engine_b
 from adh.orchestration.engine_b import load_corpus
@@ -90,6 +91,59 @@ def test_engine_b_records_are_deduplicated(minimal_spec_dict, tmp_path):
 
 
 # --------------------------------------------------------------------- tier 1 (hard, real verifier)
+@pytest.mark.parametrize(
+    ("schema_ref", "expected"),
+    [
+        ("http://schema.org/Text", "local JSON Schema"),
+        ("./schemas/qa_record.schema.json", "x-verifier"),
+        ("./schemas/missing.schema.json", "not found"),
+    ],
+)
+def test_invalid_build_config_spends_nothing_and_preserves_artifacts(
+    minimal_spec_dict, tmp_path, monkeypatch, schema_ref, expected
+):
+    from adh.orchestration import engine_b
+
+    spec = _spec(
+        minimal_spec_dict,
+        verifiability_tier=1,
+        judge_config=None,
+        record_schema_ref=schema_ref,
+    )
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("invalid build must not construct a model")
+
+    monkeypatch.setattr(engine_b, "build_generator", unexpected)
+    monkeypatch.setattr(engine_b, "build_judge", unexpected)
+    before = {}
+    for name in ("engine_b_state.json", "engine_b_verified.jsonl", "manifest.jsonl"):
+        (tmp_path / name).write_text("prior artifact")
+        before[name] = (tmp_path / name).read_bytes()
+
+    with pytest.raises(JobSpecError, match=expected):
+        run_engine_b(spec, work_dir=tmp_path, resume=False)
+
+    assert {name: (tmp_path / name).read_bytes() for name in before} == before
+    assert not (tmp_path / "dataset").exists()
+
+
+def test_build_summary_explains_rejected_records(minimal_spec_dict, tmp_path, caplog):
+    from adh.verification.jury import PanelResult
+
+    class RejectingJudge:
+        def evaluate(self, **kwargs):
+            return PanelResult(scores={"accuracy": 1.0}, models=("test:judge",))
+
+    spec = _spec(minimal_spec_dict, target_size={"records": 2})
+    _seed_corpus(spec, tmp_path)
+    result = _run_b(spec, tmp_path, judge=RejectingJudge())
+    assert result.n_records == 0
+    summary = json.loads(result.summary_path.read_text())
+    assert any("verification rejection (jury): jury overall" in n for n in summary["notes"])
+    assert "rejected at jury: jury overall" in caplog.text
+
+
 def test_engine_b_tier1_code_uses_real_verifier(minimal_spec_dict, tmp_path):
     spec = _spec(
         minimal_spec_dict,

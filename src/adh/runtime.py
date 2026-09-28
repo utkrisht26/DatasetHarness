@@ -12,9 +12,10 @@ heuristic fallbacks otherwise, and every LLM call metered into the run's
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from typing import Callable
+
+from adh.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ def live_ports() -> tuple:
     """
     from adh.search import InMemoryDatasetRegistry, InMemorySearchProvider
 
-    tavily_key = os.environ.get("TAVILY_API_KEY")
+    tavily_key = get_settings().tavily_api_key_value
     if tavily_key:
         try:
             from adh.search.tavily_provider import TavilySearchProvider
@@ -71,7 +72,7 @@ def _live_media_providers() -> tuple[list, list[str]]:
     try:
         from adh.channels.media.openverse import OpenverseImageProvider
 
-        providers.append(OpenverseImageProvider())
+        providers.append(OpenverseImageProvider.from_env())
     except Exception as exc:
         gaps.append(f"media/openverse unavailable: {exc}")
     try:

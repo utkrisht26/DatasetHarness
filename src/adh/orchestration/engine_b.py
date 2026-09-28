@@ -29,6 +29,7 @@ from adh.contract import (
     JobSpec,
     Record,
     RecordValidationError,
+    check_job_spec,
     get_verifier_hook,
     is_media_modality,
     load_record_schema,
@@ -107,6 +108,9 @@ def run_engine_b(
     wallclock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
 ) -> EngineBResult:
     """Build a verified dataset from an Engine A run directory."""
+    # Validate before constructing models, consuming tokens, or resetting any
+    # prior build artifacts. A missing Tier-1 oracle would reject every candidate.
+    check_job_spec(spec, base_dir=schema_base_dir).raise_if_errors()
     work = Path(work_dir)
     work.mkdir(parents=True, exist_ok=True)
     job_id = spec.job_id or spec.name
@@ -124,7 +128,7 @@ def run_engine_b(
             p.unlink(missing_ok=True)
 
     # ---- record schema + Tier-1 verifier hook ----
-    schema, hook = _load_schema(spec, schema_base_dir, notes)
+    schema, hook = _load_schema(spec, schema_base_dir)
 
     # ---- Engine A outputs ----
     plan = load_plan(work)
@@ -330,6 +334,20 @@ def _generate_and_verify(
             verdict = router.verify(cand)
             if verdict.dropped:
                 state.counters[f"dropped_{verdict.stage}"] += 1
+                logger.warning(
+                    "candidate %s rejected at %s: %s",
+                    cand.candidate_id,
+                    verdict.stage,
+                    verdict.reason,
+                )
+                # Keep a bounded sample of distinct reasons in the durable build
+                # summary, without persisting rejected (potentially PII) content.
+                note = f"verification rejection ({verdict.stage}): {verdict.reason[:500]}"
+                if (
+                    note not in state.notes
+                    and sum(n.startswith("verification rejection (") for n in state.notes) < 10
+                ):
+                    state.notes.append(note)
                 continue
             kept.append((cand, verdict))
             _append_verified(verified_path, cand, verdict)
@@ -481,12 +499,8 @@ def load_corpus(work: Path, store: CorpusStore) -> tuple[list[CorpusChunk], list
     return chunks, handoffs
 
 
-def _load_schema(spec, schema_base_dir, notes) -> tuple[dict | None, dict | None]:
-    try:
-        schema = load_record_schema(spec.record_schema_ref, base_dir=schema_base_dir)
-    except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
-        notes.append(f"record schema unreadable ({exc}); skipping per-job JSON-Schema validation")
-        return None, None
+def _load_schema(spec, schema_base_dir) -> tuple[dict, dict | None]:
+    schema = load_record_schema(spec.record_schema_ref, base_dir=schema_base_dir)
     return schema, get_verifier_hook(schema)
 
 

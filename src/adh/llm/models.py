@@ -10,6 +10,7 @@ Where traffic goes is configuration, not code: several gateways expose
 OpenAI-compatible APIs (OpenRouter, Together, Groq, vLLM, Ollama, …), so the
 endpoint is chosen per environment instead of being hard-wired:
 
+* ``ADH_DISCOVERY_MODEL`` — default model for deep source discovery.
 * ``ADH_LLM_BASE_URL`` — route every factory-built model through this endpoint.
 * ``ADH_LLM_API_KEY``  — credential paired with that endpoint; without it the
   ambient provider variables (e.g. ``OPENAI_API_KEY``) still resolve.
@@ -30,36 +31,34 @@ importable without it, and callers that never build a model never pay for it.
 
 from __future__ import annotations
 
-import os
 from typing import TYPE_CHECKING, Any
+
+from adh.settings import (
+    DEFAULT_DISCOVERY_MODEL,
+    GENERATOR_MODELS_ENV as SETTINGS_GENERATOR_MODELS_ENV,
+    JUDGE_MODELS_ENV as SETTINGS_JUDGE_MODELS_ENV,
+    LLM_API_KEY_ENV,
+    LLM_BASE_URL_ENV,
+    env_model_list as settings_env_model_list,
+    get_settings,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from langchain_core.language_models.chat_models import BaseChatModel
 
-# Environment names for endpoint routing (see module docstring).
-BASE_URL_ENV = "ADH_LLM_BASE_URL"
-API_KEY_ENV = "ADH_LLM_API_KEY"
-# Environment names for Engine B model selection — the same "configuration, not
-# code" seam as the endpoint above (see module docstring).
-GENERATOR_MODELS_ENV = "ADH_GENERATOR_MODELS"
-JUDGE_MODELS_ENV = "ADH_JUDGE_MODELS"
+# Backward-compatible names; the canonical registry lives in ``adh.settings``.
+BASE_URL_ENV = LLM_BASE_URL_ENV
+API_KEY_ENV = LLM_API_KEY_ENV
+GENERATOR_MODELS_ENV = SETTINGS_GENERATOR_MODELS_ENV
+JUDGE_MODELS_ENV = SETTINGS_JUDGE_MODELS_ENV
 
-# Cheap, capable default for relevance/judging work; override per call site.
-DEFAULT_CHAT_MODEL = "openai:stealth/ox-alpha"
+# Backward-compatible default for call sites that do not accept a settings object.
+DEFAULT_CHAT_MODEL = DEFAULT_DISCOVERY_MODEL
 
 
 def env_model_list(env_name: str) -> list[str]:
-    """Parse a comma-separated model-id list from ``env_name`` ([] when unset).
-
-    Shared syntax for both Engine B seams:
-    ``ADH_GENERATOR_MODELS="openai:gpt-4o-mini, anthropic:claude-opus-4-5"``
-    configures a two-tier ladder; whitespace around ids is tolerated and empty
-    entries are dropped.
-    """
-    raw = os.environ.get(env_name)
-    if not raw:
-        return []
-    return [part.strip() for part in raw.split(",") if part.strip()]
+    """Backward-compatible model-list accessor backed by central settings."""
+    return settings_env_model_list(env_name)
 
 
 def build_chat_model(model_id: str = DEFAULT_CHAT_MODEL, **kwargs: Any) -> "BaseChatModel":
@@ -80,11 +79,10 @@ def build_chat_model(model_id: str = DEFAULT_CHAT_MODEL, **kwargs: Any) -> "Base
         ) from exc
 
     if "base_url" not in kwargs:
-        base_url = os.environ.get(BASE_URL_ENV)
-        if base_url:
-            kwargs["base_url"] = base_url
-            api_key = os.environ.get(API_KEY_ENV)
-            if api_key and "api_key" not in kwargs:
-                kwargs["api_key"] = api_key
+        settings = get_settings()
+        if settings.llm_base_url:
+            kwargs["base_url"] = settings.llm_base_url
+            if settings.llm_api_key_value and "api_key" not in kwargs:
+                kwargs["api_key"] = settings.llm_api_key_value
 
     return init_chat_model(model_id, **kwargs)

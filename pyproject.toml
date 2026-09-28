@@ -10,6 +10,7 @@ authors = [{ name = "Brilo", email = "uttkrisht@brilo.ai" }]
 # behind adapters so the harness runs and is fully testable without them.
 dependencies = [
     "pydantic>=2.7",
+    "python-dotenv>=1.0",
     "pyyaml>=6.0",
     "jsonschema>=4.20",
     "langchain-openrouter>=0.2.8",

@@ -16,15 +16,16 @@ capture — pytest's ``caplog``, or a host's own root handler — still sees the
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from typing import TextIO
+
+from adh.settings import DEFAULT_LOG_LEVEL, LOG_LEVEL_ENV, get_settings
 
 LOGGER_NAME = "adh"
 _FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
 _DATEFMT = "%H:%M:%S"
-_DEFAULT_LEVEL = "INFO"
-_ENV_VAR = "ADH_LOG_LEVEL"
+_DEFAULT_LEVEL = DEFAULT_LOG_LEVEL
+_ENV_VAR = LOG_LEVEL_ENV
 
 
 def resolve_level(level: int | str | None) -> int:
@@ -35,7 +36,7 @@ def resolve_level(level: int | str | None) -> int:
     never crash the entry point.
     """
     if level is None:
-        level = os.environ.get(_ENV_VAR, _DEFAULT_LEVEL)
+        level = get_settings().log_level
     if isinstance(level, str):
         named = logging.getLevelName(level.strip().upper())
         return named if isinstance(named, int) else logging.INFO

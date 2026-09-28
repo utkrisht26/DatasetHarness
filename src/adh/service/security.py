@@ -8,7 +8,9 @@ from collections.abc import Iterable
 
 from starlette.responses import JSONResponse
 
-API_KEY_ENV = "ADH_API_KEY"
+from adh.settings import SERVICE_API_KEY_ENV
+
+API_KEY_ENV = SERVICE_API_KEY_ENV
 DEFAULT_PUBLIC_PATHS = frozenset({"/api/healthz"})
 
 

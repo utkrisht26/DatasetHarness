@@ -15,10 +15,11 @@ The HTTP client is injectable (``client_factory``) so tests run fully offline.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass, field
 from typing import Any
+
+from adh.settings import PEXELS_API_KEY_ENV, get_settings
 
 from .provider import MediaHit
 
@@ -47,10 +48,10 @@ class PexelsMediaProvider:
     @classmethod
     def from_env(cls, *, client_factory: Callable[[str], Any] | None = None):
         """Build from ``PEXELS_API_KEY``; loud error when the owner hasn't set it."""
-        api_key = os.environ.get("PEXELS_API_KEY")
+        api_key = get_settings().pexels_api_key_value
         if not api_key:
             raise RuntimeError(
-                "PEXELS_API_KEY is not set; get a free key at https://www.pexels.com/api/ "
+                f"{PEXELS_API_KEY_ENV} is not set; get a free key at https://www.pexels.com/api/ "
                 "and export it before running media jobs"
             )
         kwargs = {"api_key": api_key}

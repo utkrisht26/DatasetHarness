@@ -297,9 +297,9 @@ def build_judge(spec, *, usage: UsageTracker | None = None) -> JudgePanel:
 def _configured_judge_models(cfg) -> tuple[str, ...]:
     """Deployment panel (``ADH_JUDGE_MODELS``) first, else the spec's own."""
     from adh.contract.families import distinct_families
-    from adh.llm import JUDGE_MODELS_ENV, env_model_list
+    from adh.settings import JUDGE_MODELS_ENV, get_settings
 
-    env_ids = env_model_list(JUDGE_MODELS_ENV)
+    env_ids = list(get_settings().judge_models)
     if not env_ids:
         return tuple(cfg.models) if cfg and cfg.models else ()
     families = distinct_families(env_ids)

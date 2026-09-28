@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import ipaddress
 import logging
-import os
 import socket
 import threading
 from html.parser import HTMLParser
@@ -300,7 +299,9 @@ def _get_tavily_client() -> TavilyClient | None:
         if settings.has_tavily:
             api_key = settings.tavily_api_key
     if not api_key:
-        api_key = os.environ.get("TAVILY_API_KEY") or None
+        from adh.settings import get_settings
+
+        api_key = get_settings().tavily_api_key_value
 
     if api_key:
         from tavily import TavilyClient as _TavilyClient

@@ -327,9 +327,9 @@ def build_generator(spec: JobSpec, *, usage: UsageTracker | None = None) -> Gene
 
 def _configured_generator_models(spec: JobSpec) -> list[str]:
     """Deployment ladder (``ADH_GENERATOR_MODELS``) first, else the spec's own."""
-    from adh.llm import GENERATOR_MODELS_ENV, env_model_list
+    from adh.settings import GENERATOR_MODELS_ENV, get_settings
 
-    env_ids = env_model_list(GENERATOR_MODELS_ENV)
+    env_ids = list(get_settings().generator_models)
     if env_ids:
         logger.warning(
             "generator ladder overridden by %s=%s (spec configured %s)",

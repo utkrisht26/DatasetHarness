@@ -20,6 +20,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import jsonschema
 from pydantic import ValidationError
@@ -88,6 +89,15 @@ def check_job_spec(spec: JobSpec, *, base_dir: Path | None = None) -> Validation
     """
     report = ValidationReport()
 
+    if urlsplit(spec.record_schema_ref).scheme in {"http", "https"}:
+        report.errors.append(
+            f"record_schema_ref={spec.record_schema_ref!r} must name a local JSON Schema "
+            "file; remote schema URLs are not supported. For text input/output records, "
+            "use './schemas/qa_record.schema.json' with verifiability_tier=2 and a "
+            "judge_config, or provide a Tier-1 schema with an executable x-verifier."
+        )
+        return report
+
     try:
         schema = load_record_schema(spec.record_schema_ref, base_dir=base_dir)
     except FileNotFoundError:
@@ -95,6 +105,10 @@ def check_job_spec(spec: JobSpec, *, base_dir: Path | None = None) -> Validation
         return report
     except (json.JSONDecodeError, OSError) as exc:
         report.errors.append(f"record_schema_ref is not readable JSON: {exc}")
+        return report
+
+    if not isinstance(schema, dict):
+        report.errors.append("record_schema_ref must contain a JSON Schema object")
         return report
 
     try:
@@ -108,7 +122,8 @@ def check_job_spec(spec: JobSpec, *, base_dir: Path | None = None) -> Validation
         if hook is None:
             report.errors.append(
                 "verifiability_tier=1 (hard) requires the record schema to declare an "
-                "'x-verifier' hook naming a deterministic verifier (module:function)"
+                "'x-verifier' hook naming a deterministic verifier (module:function). "
+                "For descriptive text records, use verifiability_tier=2 with judge_config."
             )
         elif not hook.get("entry"):
             report.errors.append("x-verifier hook is missing required 'entry' (module:function)")

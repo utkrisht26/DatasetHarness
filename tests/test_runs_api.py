@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 
 from adh.channels.web import Crawl4AIContentFetcher
@@ -74,6 +75,28 @@ def test_post_run_pauses_at_awaiting_approval(minimal_spec_dict, tmp_path):
         # and it appears in the list view
         listed = client.get("/api/runs").json()
         assert [x["run_id"] for x in listed] == [run_id]
+
+
+def test_run_events_are_durable_ordered_and_pollable(minimal_spec_dict, tmp_path):
+    with _make_client(tmp_path) as client:
+        run_id = client.post("/api/runs", json=_spec_body(minimal_spec_dict)).json()["run_id"]
+        _await_status(client, run_id, "awaiting_approval")
+
+        response = client.get(f"/api/runs/{run_id}/events")
+        assert response.status_code == 200
+        events = response.json()
+        assert events
+        assert [event["sequence"] for event in events] == sorted(
+            event["sequence"] for event in events
+        )
+        names = {event["event"] for event in events}
+        assert {"run.created", "phase.started", "phase.completed"} <= names
+
+        last_sequence = events[-1]["sequence"]
+        assert (
+            client.get(f"/api/runs/{run_id}/events", params={"after": last_sequence}).json() == []
+        )
+        assert client.get("/api/runs/nope/events").status_code == 404
 
 
 def test_approve_subset_runs_to_succeeded(minimal_spec_dict, tmp_path):
@@ -364,6 +387,35 @@ def test_build_endpoint_produces_a_dataset(minimal_spec_dict, tmp_path):
         assert rebuild.status_code == 202
 
 
+@pytest.mark.parametrize(
+    ("schema_ref", "expected"),
+    [
+        ("http://schema.org/Text", "local JSON Schema"),
+        ("./schemas/qa_record.schema.json", "x-verifier"),
+    ],
+)
+def test_build_rejects_invalid_verification_config_before_queuing(
+    minimal_spec_dict, tmp_path, schema_ref, expected
+):
+    with _offline_build_client(tmp_path) as client:
+        run_id = _run_to_succeeded(
+            client,
+            minimal_spec_dict,
+            verifiability_tier=1,
+            judge_config=None,
+            record_schema_ref=schema_ref,
+        )
+        work = tmp_path / "runs" / run_id
+        before = (work / "manifest.jsonl").read_bytes()
+        response = client.post(f"/api/runs/{run_id}/build")
+        assert response.status_code == 422
+        assert expected in response.json()["detail"]
+        assert client.get(f"/api/runs/{run_id}").json()["status"] == "succeeded"
+        assert (work / "manifest.jsonl").read_bytes() == before
+        assert not (work / "engine_b_state.json").exists()
+        assert client.get(f"/api/runs/{run_id}/dataset").status_code == 404
+
+
 def test_double_build_in_flight_is_409(minimal_spec_dict, tmp_path):
     import time as _time
 
@@ -424,7 +476,7 @@ def test_deep_agent_seeds_drive_the_crawler_end_to_end(minimal_spec_dict, tmp_pa
     from adh.discovery import DeepAgentDiscoveryAgent
     from adh.search import InMemoryDatasetRegistry, InMemorySearchProvider
 
-    from .test_deep_agent import ScriptedChatModel, _tool_call
+    from .test_deep_agent import ScriptedChatModel, _plan_call, _tool_call
 
     seed_url = "https://docs.rs/tokio/latest/tokio/"
     report = {
@@ -455,7 +507,11 @@ def test_deep_agent_seeds_drive_the_crawler_end_to_end(minimal_spec_dict, tmp_pa
 
     def seed_proposing_agent(usage):
         return DeepAgentDiscoveryAgent(
-            model=ScriptedChatModel(messages=iter([_tool_call("DiscoveryReport", report, "t1")])),
+            model=ScriptedChatModel(
+                messages=iter(
+                    [_plan_call(web_only=True), _tool_call("DiscoveryReport", report, "t1")]
+                )
+            ),
             search=InMemorySearchProvider(),  # nothing to search: agent must propose
             registry=InMemoryDatasetRegistry(),
             usage=usage,
