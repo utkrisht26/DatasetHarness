@@ -38,7 +38,12 @@ from adh.orchestration.saturation import SaturationTracker
 from .channel import Crawl4AIContentFetcher, FetchedPage
 from .internal.contracts import CrawlRequest, CrawlResponse
 from .internal.policy import assemble_policy
-from .internal.relevance import Bm25RelevanceJudge, KeepAllJudge, LlmRelevanceJudge, RelevanceJudge
+from .internal.relevance import (
+    Bm25RelevanceJudge,
+    KeepAllJudge,
+    LlmRelevanceJudge,
+    RelevanceJudge,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -290,7 +295,10 @@ class CrawlServiceApp:
                         "timestamp": time.time(),
                         "url": req.url,
                         "verdict": "failed",
-                        "metadata": {"error": str(exc), "reason": "Job execution failed"},
+                        "metadata": {
+                            "error": str(exc),
+                            "reason": "Job execution failed",
+                        },
                     }
                 )
         finally:

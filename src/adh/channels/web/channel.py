@@ -65,7 +65,9 @@ class InMemoryContentFetcher:
             if md is not None:
                 out.append(
                     FetchedPage(
-                        url=current, markdown=md, license_hint=self.license_hints.get(current)
+                        url=current,
+                        markdown=md,
+                        license_hint=self.license_hints.get(current),
                     )
                 )
             for nxt in self.links.get(current, []):
@@ -167,7 +169,9 @@ class Crawl4AIContentFetcher:
         if self._router is None:
             service = self._ensure_service()
             self._router = CrawlRouter(
-                service, workers=service.config.max_concurrent_pages, max_depth=self.max_depth
+                service,
+                workers=service.config.max_concurrent_pages,
+                max_depth=self.max_depth,
             )
         return self._router
 

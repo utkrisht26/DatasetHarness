@@ -75,6 +75,7 @@ dev = [
     "sympy>=1.12",     # exercises the real Tier-1 math verifier offline
     "datasketch>=1.6", # exercises the real MinHash/LSH near-dedup offline
     "pyarrow>=16",     # exercises Parquet delivery offline
+    "httpx2>=2.13.1",  # supported transport for Starlette's synchronous TestClient
 ]
 
 [project.scripts]

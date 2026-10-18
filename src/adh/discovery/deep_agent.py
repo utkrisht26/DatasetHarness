@@ -164,12 +164,14 @@ class ReportSource(BaseModel):
     title: str = Field("", description="Descriptive title; steers the crawler's link-following")
     aspect_index: int = Field(0, description="Index into the report's aspects list")
     snippet: str = Field(
-        "", description="Keyword-rich summary of what lives there; steers the crawl frontier"
+        "",
+        description="Keyword-rich summary of what lives there; steers the crawl frontier",
     )
     license: str | None = Field(None, description="License if visible (e.g. 'MIT'), else null")
     published: str | None = Field(None, description="Publish/update date if visible (YYYY-MM-DD)")
     discovered_via: str = Field(
-        "", description="The search query that surfaced it, or 'model-knowledge' for proposed seeds"
+        "",
+        description="The search query that surfaced it, or 'model-knowledge' for proposed seeds",
     )
     shape_match: float = Field(0.0, description="0-1: does it contain records of the target shape?")
     quality: float = Field(0.0, description="0-1: signal vs noise of the content")
@@ -272,6 +274,8 @@ def build_discovery_tools(
 
     counters = {"web": 0, "dataset": 0}
     counter_lock = Lock()
+    plan_execution_lock = Lock()
+    executed_plan_queries: dict[str, set[str]] = {"web": set(), "datasets": set()}
     research = research_state if research_state is not None else DiscoveryResearchState()
     enabled = set(allowed_channels or {SourceChannel.WEB, SourceChannel.DATASETS})
 
@@ -331,6 +335,9 @@ def build_discovery_tools(
         research_dir.mkdir(parents=True, exist_ok=True)
         with (research_dir / "search_plan.json").open("w", encoding="utf-8") as stream:
             json.dump(payload, stream, indent=2)
+        with plan_execution_lock:
+            for completed in executed_plan_queries.values():
+                completed.clear()
         planning_gate.plan = payload
         planning_gate.submitted = True
         return _nudge(
@@ -339,7 +346,24 @@ def build_discovery_tools(
             f"{len(clean_datasets)} dataset query/queries. Execute this plan now."
         )
 
-    def _search_guard(query: str, channel: str, tool_name: str) -> str | None:
+    def _claim_planned_query(channel: str) -> str | None:
+        """Atomically reserve the next accepted query for a malformed tool call."""
+        if planning_gate is None or not planning_gate.submitted or planning_gate.plan is None:
+            return None
+        with plan_execution_lock:
+            completed = executed_plan_queries[channel]
+            for candidate in planning_gate.plan["queries"][channel]:
+                query = candidate.strip()
+                if _USEFUL_QUERY.search(query) is not None and query not in completed:
+                    completed.add(query)
+                    return query
+        return None
+
+    def _mark_plan_query_executed(channel: str, query: str) -> None:
+        with plan_execution_lock:
+            executed_plan_queries[channel].add(query)
+
+    def _search_guard(query: str, channel: str) -> str | None:
         if planning_gate is not None and not planning_gate.submitted:
             return _nudge(
                 "Search blocked: call submit_search_plan first with concrete aspects, "
@@ -352,14 +376,28 @@ def build_discovery_tools(
             if planning_gate is not None and planning_gate.plan is not None:
                 queries = planning_gate.plan["queries"][channel]
                 if queries:
-                    args = json.dumps({"query": queries[0]}, ensure_ascii=False)
-                    message += f" Retry {tool_name} with {args} from the accepted search plan."
+                    message += (
+                        " Every query in the accepted plan for this channel has already been "
+                        "executed; use a concrete new query or submit a revised plan."
+                    )
             return _nudge(message)
         return None
 
     def _run_search(query: str, channel: str, tool_name: str, fetch: Callable) -> str:
-        if blocked := _search_guard(query, channel, tool_name):
+        requested_query = query
+        query = query.strip()
+        repair_note = ""
+        if _USEFUL_QUERY.search(query) is None:
+            if replacement := _claim_planned_query(channel):
+                query = replacement
+                repair_note = (
+                    f"Recovered invalid {tool_name} query {requested_query!r}; "
+                    f"executed accepted-plan query {query!r} instead."
+                )
+        if blocked := _search_guard(query, channel):
             return blocked
+        if not repair_note:
+            _mark_plan_query_executed(channel, query)
         # Serialize only identical queries, leaving distinct searches parallel.
         with research.query_lock(tool_name, query):
             if previous := research.empty_search(tool_name, query):
@@ -384,10 +422,15 @@ def build_discovery_tools(
             if results
             else "This file is empty; skip reading it. Review other nonempty results or change the query."
         )
-        return _nudge(
+        result = (
             f"{prefix} results for query '{query}' (found {len(results)} results) "
             f"have been saved to virtual path '{rel_path}'. {guidance}"
         )
+        if repair_note:
+            # Keep the canonical search-result prefix first: the no-progress
+            # classifier recognizes zero-result searches from that prefix.
+            result = f"{result}\n\n{repair_note}"
+        return _nudge(result)
 
     def _web_results(query: str) -> list[dict[str, Any]]:
         return [
@@ -586,7 +629,10 @@ def _build_tracer(
                 )
             if progress.action == "review":
                 hint = research.review_hint()
-                logger.info("deep-agent recovery window for reviewing existing results: %s", hint)
+                logger.info(
+                    "deep-agent recovery window for reviewing existing results: %s",
+                    hint,
+                )
                 if telemetry is not None:
                     telemetry.emit(
                         "discovery",
@@ -679,10 +725,10 @@ def _build_tracer(
                 telemetry.emit(
                     phase,
                     "tool.completed",
-                    status="failed" if failed else "empty" if unproductive else "succeeded",
+                    status=("failed" if failed else "empty" if unproductive else "succeeded"),
                     operation_id=operation_id,
                     parent_operation_id=self._parent_id(kwargs),
-                    duration_ms=(time.perf_counter() - started) * 1_000 if started else None,
+                    duration_ms=((time.perf_counter() - started) * 1_000 if started else None),
                     attributes={
                         "tool": name,
                         "output": output_text,
@@ -702,7 +748,7 @@ def _build_tracer(
                     status="failed",
                     operation_id=operation_id,
                     parent_operation_id=self._parent_id(kwargs),
-                    duration_ms=(time.perf_counter() - started) * 1_000 if started else None,
+                    duration_ms=((time.perf_counter() - started) * 1_000 if started else None),
                     attributes={
                         "tool": name,
                         "error_type": type(error).__name__,
@@ -739,7 +785,12 @@ def _build_tracer(
                     input_tokens += usage.input_tokens
                     output_tokens += usage.output_tokens
             total = tracker.total.total_tokens if tracker is not None else delta
-            logger.info("deep-agent · model turn %d (+%d tok, %d total)", self.turns, delta, total)
+            logger.info(
+                "deep-agent · model turn %d (+%d tok, %d total)",
+                self.turns,
+                delta,
+                total,
+            )
             operation_id = self._operation_id(kwargs)
             started = self._model_started.pop(operation_id, None)
             if telemetry is not None:
@@ -749,7 +800,7 @@ def _build_tracer(
                     status="succeeded",
                     operation_id=operation_id,
                     parent_operation_id=self._parent_id(kwargs),
-                    duration_ms=(time.perf_counter() - started) * 1_000 if started else None,
+                    duration_ms=((time.perf_counter() - started) * 1_000 if started else None),
                     attributes={
                         "turn": self.turns,
                         "input_tokens": input_tokens,
@@ -792,8 +843,11 @@ def _build_tracer(
                     status="failed",
                     operation_id=operation_id,
                     parent_operation_id=self._parent_id(kwargs),
-                    duration_ms=(time.perf_counter() - started) * 1_000 if started else None,
-                    attributes={"error_type": type(error).__name__, "error": str(error)},
+                    duration_ms=((time.perf_counter() - started) * 1_000 if started else None),
+                    attributes={
+                        "error_type": type(error).__name__,
+                        "error": str(error),
+                    },
                 )
 
     return _AgentTracer()
@@ -917,9 +971,16 @@ class DeepAgentDiscoveryAgent:
             try:
                 result = graph.invoke(
                     {"messages": [{"role": "user", "content": task}]},
-                    config={"recursion_limit": self.recursion_limit, "callbacks": [tracer]},
+                    config={
+                        "recursion_limit": self.recursion_limit,
+                        "callbacks": [tracer],
+                    },
                 )
-            except (DiscoveryNoProgress, DiscoveryBudgetExceeded, DiscoveryAgentError) as exc:
+            except (
+                DiscoveryNoProgress,
+                DiscoveryBudgetExceeded,
+                DiscoveryAgentError,
+            ) as exc:
                 logger.warning(
                     "deep-agent stopped after %d model turn(s), %d tool call(s), %d token(s): %s",
                     tracer.turns,
@@ -1132,9 +1193,11 @@ class DeepAgentDiscoveryAgent:
                         result,
                         structured_response=None,
                         result=[
-                            m.model_copy(update={"content": correction, "status": "error"})
-                            if isinstance(m, ToolMessage) and m.tool_call_id in report_calls
-                            else m
+                            (
+                                m.model_copy(update={"content": correction, "status": "error"})
+                                if isinstance(m, ToolMessage) and m.tool_call_id in report_calls
+                                else m
+                            )
                             for m in result.result
                         ],
                     )

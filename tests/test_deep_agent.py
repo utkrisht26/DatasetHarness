@@ -804,7 +804,7 @@ def test_no_progress_guard_stops_repeated_empty_samples(minimal_spec_dict, tmp_p
     assert stopped[0].levelno == logging.WARNING
 
 
-def test_blocked_search_can_recover_with_a_concrete_query(minimal_spec_dict, tmp_path):
+def test_repaired_search_can_continue_with_a_concrete_query(minimal_spec_dict, tmp_path):
     model = ScriptedChatModel(
         messages=iter(
             [
@@ -821,7 +821,7 @@ def test_blocked_search_can_recover_with_a_concrete_query(minimal_spec_dict, tmp
     plan = _agent(model).discover(_spec(minimal_spec_dict), tmp_path)
     assert "discovery: deepagents research loop" in plan.notes
     assert (tmp_path / "research" / "web_search_1.json").exists()
-    assert not (tmp_path / "research" / "web_search_2.json").exists()
+    assert (tmp_path / "research" / "web_search_2.json").exists()
 
 
 def test_empty_search_file_reads_do_not_count_as_new_failed_searches(minimal_spec_dict, tmp_path):
@@ -989,7 +989,9 @@ def test_no_progress_guard_stops_delegated_research(
     )
     usage = UsageTracker()
     with pytest.raises(DiscoveryNoProgress, match="3 consecutive"):
-        _agent(model, usage=usage).discover(_spec(minimal_spec_dict), tmp_path)
+        _agent(model, usage=usage, search=InMemorySearchProvider()).discover(
+            _spec(minimal_spec_dict), tmp_path
+        )
     assert usage.calls == 5
     assert not any("callback" in record.getMessage() for record in caplog.records)
 
@@ -1058,7 +1060,9 @@ def test_planning_gate_blocks_search_and_omits_disabled_channel_tools(tmp_path):
     ],
 )
 @pytest.mark.parametrize("query", ["", ":", "   ", "…"])
-def test_blocked_search_suggests_accepted_channel_query(tool_name, expected_query, query, tmp_path):
+def test_placeholder_search_executes_accepted_channel_query(
+    tool_name, expected_query, query, tmp_path
+):
     gate = DiscoveryPlanningGate(frozenset({SourceChannel.WEB, SourceChannel.DATASETS}))
     tools = build_discovery_tools(
         InMemorySearchProvider(),
@@ -1070,10 +1074,42 @@ def test_blocked_search_suggests_accepted_channel_query(tool_name, expected_quer
     by_name = {tool.__name__: tool for tool in tools}
     by_name["submit_search_plan"](**_PLAN_ARGS)
     result = by_name[tool_name](query)
-    assert "Search blocked:" in result
-    assert f'Retry {tool_name} with {{"query": "{expected_query}"}}' in result
+    assert f"Recovered invalid {tool_name} query" in result
+    assert f"executed accepted-plan query {expected_query!r} instead" in result
     assert "[budget] discovery token budget: 100/1000 used" in result
-    assert not (tmp_path / "research" / f"{tool_name}_1.json").exists()
+    artifact = tmp_path / "research" / f"{tool_name}_1.json"
+    assert artifact.exists()
+    assert json.loads(artifact.read_text())["query"] == expected_query
+
+
+def test_placeholder_query_uses_plan_and_deep_agent_recovers(minimal_spec_dict, tmp_path):
+    model = ScriptedChatModel(
+        messages=iter(
+            [
+                _plan_call(web_only=True),
+                _tool_call("web_search", {"query": ": "}, "repaired-search"),
+                _tool_call("read_file", {"file_path": "/research/web_search_1.json"}, "review"),
+                _tool_call("DiscoveryReport", _REPORT_ARGS, "report"),
+            ]
+        )
+    )
+    usage = UsageTracker()
+    planned = plan_run(
+        _spec(minimal_spec_dict, discovery={"channels": ["web"]}),
+        work_dir=tmp_path,
+        agent=_agent(model, usage=usage),
+        usage=usage,
+        run_id="placeholder-recovery",
+    )
+
+    artifact = json.loads((tmp_path / "research" / "web_search_1.json").read_text())
+    assert artifact["query"] == _PLAN_ARGS["web_queries"][0]
+    assert [source.candidate.locator for source in planned.plan.sources] == [
+        "https://tokio.rs/internals"
+    ]
+    assert usage.calls == 4
+    assert not any("heuristic fallback" in note for note in planned.plan.notes)
+    assert not any(event["event"] == "guard.no_progress" for event in read_telemetry(tmp_path))
 
 
 def test_run_traces_steps_and_summarises_spend(minimal_spec_dict, caplog, tmp_path):
@@ -1306,7 +1342,10 @@ def test_no_progress_fallback_records_cause_without_traceback(minimal_spec_dict,
         )
     )
     usage = UsageTracker()
-    agent = FallbackDiscoveryAgent(primary=_agent(model, usage=usage))
+    primary = _agent(model, usage=usage, search=InMemorySearchProvider())
+    agent = FallbackDiscoveryAgent(
+        primary=primary, fallback=SourceDiscoveryAgent(search=primary.search)
+    )
     planned = plan_run(
         _spec(minimal_spec_dict, discovery={"channels": ["web"]}),
         work_dir=tmp_path,
