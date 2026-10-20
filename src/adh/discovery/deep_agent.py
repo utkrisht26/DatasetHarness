@@ -69,6 +69,7 @@ from .agent import (
     score_candidate,
     target_shape,
 )
+from .junk import is_junk_source
 from .models import Aspect, CandidateSource, FetchPlan, RankedSource, SourceEvaluation
 from .research import RESEARCH_TOOLS, DiscoveryResearchState
 
@@ -1364,9 +1365,20 @@ class DeepAgentDiscoveryAgent:
         if not 0 <= src.aspect_index < len(aspects):
             notes.append(f"skip {src.locator}: bad aspect index {src.aspect_index}")
             return None
-        if channel == SourceChannel.WEB and not domain_allowed(src.locator, spec):
-            notes.append(f"skip {src.locator}: domain not allowed by constraints")
-            return None
+        if channel == SourceChannel.WEB:
+            if not domain_allowed(src.locator, spec):
+                notes.append(f"skip {src.locator}: domain not allowed by constraints")
+                return None
+            junk = is_junk_source(
+                src.locator,
+                title=src.title,
+                snippet=src.snippet,
+                spec=spec,
+                aspect=aspects[src.aspect_index] if 0 <= src.aspect_index < len(aspects) else None,
+            )
+            if junk:
+                notes.append(f"skip {src.locator}: junk source ({junk.reason})")
+                return None
 
         aspect = aspects[src.aspect_index]
         prefix = "ds" if channel == SourceChannel.DATASETS else "web"

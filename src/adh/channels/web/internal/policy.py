@@ -22,6 +22,8 @@ from dataclasses import dataclass, field
 from typing import Callable
 from urllib.parse import urlparse
 
+from adh.discovery.junk import is_junk_url
+
 from .contracts import CrawlRequest
 from .relevance import KeepAllJudge, RelevanceJudge
 from .scoring import KeywordRelevanceScorer, NullScorer, UrlScorer
@@ -74,6 +76,8 @@ def domain_filter(url: str, seed: CrawlRequest) -> bool:
         return False
     incl = seed.include_domains or ()
     if incl and not any(host == d.lower() or host.endswith("." + d.lower()) for d in incl):
+        return False
+    if is_junk_url(url, keywords=seed.keywords):
         return False
     return True
 

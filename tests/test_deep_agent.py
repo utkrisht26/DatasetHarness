@@ -637,6 +637,46 @@ def test_domain_constraints_filter_web_sources(minimal_spec_dict, tmp_path):
     assert any("domain not allowed" in n for n in plan.notes)
 
 
+def test_junk_sources_filtered_from_deep_agent_report(minimal_spec_dict, tmp_path):
+    """Junk web sources reported by deep agent are filtered out with a note."""
+    report = {
+        "aspects": [
+            {"topic": "rust async macros", "rationale": "core", "keywords": ["rust", "async"]}
+        ],
+        "sources": [
+            {
+                "channel": "web",
+                "locator": "https://rust-lang.github.io/async-book",
+                "title": "Async book",
+                "aspect_index": 0,
+                "shape_match": 0.8,
+                "quality": 0.8,
+                "est_yield": 10,
+            },
+            {
+                "channel": "web",
+                "locator": "https://www.indeed.com/q-async-programming-jobs.html",
+                "title": "Now Hiring: 800 Async Programming Jobs | Indeed",
+                "snippet": "now hiring async jobs salary search",
+                "aspect_index": 0,
+                "shape_match": 0.5,
+                "quality": 0.5,
+                "est_yield": 5,
+            },
+        ],
+        "synthesis_aspect_indexes": [],
+        "notes": [],
+    }
+    model = ScriptedChatModel(
+        messages=iter([_plan_call(), _tool_call("DiscoveryReport", report, "t1")])
+    )
+    plan = _agent(model).discover(_spec(minimal_spec_dict), tmp_path)
+    locators = [s.candidate.locator for s in plan.sources]
+    assert "https://rust-lang.github.io/async-book" in locators
+    assert "https://www.indeed.com/q-async-programming-jobs.html" not in locators
+    assert any("junk source" in n for n in plan.notes)
+
+
 def test_model_proposed_seeds_survive_with_empty_search_ports(minimal_spec_dict, tmp_path):
     """The core MVP: no user seeds + no search results -> the agent still hands
     the crawler starting links from its own knowledge (discovered_via=model-knowledge)."""

@@ -40,6 +40,7 @@ from adh.search import (
 )
 from adh.telemetry import current_telemetry
 
+from .junk import is_junk_source
 from .models import Aspect, CandidateSource, FetchPlan, RankedSource, SourceEvaluation
 
 if TYPE_CHECKING:
@@ -74,7 +75,7 @@ class DiscoveryConfig:
     w_quality: float = 0.3
     w_yield: float = 0.2
     channel_bonus_datasets: float = 0.15  # reuse-first tie-break
-    license_penalty: float = 0.5  # applied when license not in allowed_licenses
+    license_penalty: float = 0.2  # applied when license not in allowed_licenses
     freshness_penalty: float = 0.2
 
 
@@ -347,6 +348,15 @@ class SourceDiscoveryAgent:
             for hit in self.search.search(query, limit=self.config.max_candidates_per_aspect):
                 if hit.url in exclude or not self._domain_allowed(hit.url, spec):
                     continue
+                junk = is_junk_source(
+                    hit.url,
+                    title=hit.title,
+                    snippet=hit.snippet,
+                    spec=spec,
+                    aspect=aspect,
+                )
+                if junk:
+                    continue
                 cand = CandidateSource(
                     source_id=f"{aspect.aspect_id}:web:{hit.url}",
                     channel=SourceChannel.WEB,
@@ -407,6 +417,25 @@ class SourceDiscoveryAgent:
         *,
         hit: DatasetHit | SearchHit | None = None,
     ) -> RankedSource:
+        junk = is_junk_source(
+            cand.locator,
+            title=cand.title,
+            snippet=cand.snippet,
+            spec=spec,
+        )
+        if junk:
+            evaluation = SourceEvaluation(
+                source_id=cand.source_id,
+                shape_match=0.0,
+                quality=0.0,
+                license_ok=False,
+                freshness_ok=True,
+                estimated_yield=0,
+                score=0.0,
+                notes=f"junk source: {junk.reason}",
+            )
+            return RankedSource(candidate=cand, evaluation=evaluation)
+
         assessment = self.llm.assess_candidate(
             target_shape=self._target_shape(spec),
             keywords=draft.keywords,
@@ -531,9 +560,33 @@ def dedupe_and_rank(sources: list[RankedSource]) -> list[RankedSource]:
     best: dict[str, RankedSource] = {}
     for s in sources:
         key = s.candidate.locator
-        if key not in best or s.evaluation.score > best[key].evaluation.score:
+        rank_key = (
+            s.evaluation.score,
+            s.evaluation.shape_match,
+            s.evaluation.quality,
+            s.evaluation.estimated_yield,
+        )
+        if key not in best:
             best[key] = s
-    return sorted(best.values(), key=lambda s: s.evaluation.score, reverse=True)
+        else:
+            prev_key = (
+                best[key].evaluation.score,
+                best[key].evaluation.shape_match,
+                best[key].evaluation.quality,
+                best[key].evaluation.estimated_yield,
+            )
+            if rank_key > prev_key:
+                best[key] = s
+    return sorted(
+        best.values(),
+        key=lambda s: (
+            s.evaluation.score,
+            s.evaluation.shape_match,
+            s.evaluation.quality,
+            s.evaluation.estimated_yield,
+        ),
+        reverse=True,
+    )
 
 
 def fixed_plan(spec: JobSpec, job_id: str, notes: list[str]) -> FetchPlan:
