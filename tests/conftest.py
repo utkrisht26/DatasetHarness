@@ -31,6 +31,47 @@ def _isolate_process_environ():
 
 
 @pytest.fixture(autouse=True)
+def _no_developer_configuration(monkeypatch, _isolate_process_environ):
+    """Run every test as if on a clean machine: no .env, no keys, no live discovery ports.
+
+    ``main()`` loads the repo ``.env``, and a developer's shell may export the same
+    variables. Either way the code under test would pick up real provider keys and
+    model ladders and make live, billed calls (``adh discover`` hung on one). Tests
+    that need configuration set it explicitly with ``monkeypatch.setenv``.
+    """
+    import dotenv
+
+    import adh.runtime
+    from adh.search import InMemoryDatasetRegistry, InMemorySearchProvider
+
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **k: False)
+    for name in list(os.environ):
+        if name.startswith(_DEVELOPER_ENV_PREFIXES) or name in _DEVELOPER_ENV_NAMES:
+            monkeypatch.delenv(name)
+    # The live registry queries the HF Hub even without a key; discovery under test
+    # runs on the deterministic in-memory ports instead.
+    monkeypatch.setattr(
+        adh.runtime,
+        "live_ports",
+        lambda: (InMemorySearchProvider(), InMemoryDatasetRegistry()),
+    )
+
+
+_DEVELOPER_ENV_PREFIXES = ("ADH_",)
+_DEVELOPER_ENV_NAMES = frozenset(
+    {
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENROUTER_API_KEY",
+        "TAVILY_API_KEY",
+        "PEXELS_API_KEY",
+        "OPENVERSE_API_KEY",
+        "HF_TOKEN",
+    }
+)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_adh_logger():
     """Keep the process-global ``adh`` logger from leaking across tests.
 
