@@ -156,6 +156,14 @@ _CORRECTION = (
     "object — no prose, no markdown fences."
 )
 
+# A reasoning model can spend its whole completion budget thinking and return no
+# content (finish_reason "length"). Re-asking at the same budget fails identically,
+# so the single retry gets this many times the headroom instead (bounded).
+_TRUNCATION_HEADROOM = 8
+_DEFAULT_MAX_TOKENS = 1024
+_MAX_RETRY_TOKENS = 16_384
+_TRUNCATION_REASONS = frozenset({"length", "max_tokens"})  # OpenAI / Anthropic
+
 
 @dataclass
 class LlmGenerator:
@@ -188,10 +196,18 @@ class LlmGenerator:
         text = _text(response)
         payload = _parse_payload(text)
         if payload is None:
-            # One bounded corrective re-ask: providers intermittently wrap or drop the
-            # JSON despite the system prompt (b6b176e6 lost ~a third of its calls this
-            # way). Still unparseable -> return empty and let routing escalate.
-            payload, delta_re = self._reask(sys=sys, human=human, prior=text, gen_params=gen_params)
+            # One bounded retry. Truncated-before-answering gets more token headroom;
+            # otherwise a corrective re-ask, since providers intermittently wrap or drop
+            # the JSON despite the system prompt (b6b176e6 lost ~a third of its calls
+            # this way). Still unparseable -> return empty and let routing escalate.
+            if not text.strip() and _finish_reason(response) in _TRUNCATION_REASONS:
+                payload, delta_re = self._retry_truncated(
+                    sys=sys, human=human, gen_params=gen_params, seed_id=seed.seed_id
+                )
+            else:
+                payload, delta_re = self._reask(
+                    sys=sys, human=human, prior=text, gen_params=gen_params
+                )
             if delta is not None and delta_re is not None:
                 delta = delta + delta_re
         if payload is None:
@@ -199,6 +215,13 @@ class LlmGenerator:
                 "generator produced unparseable output for seed %s — rejected reply head: %.200r",
                 seed.seed_id,
                 text[:200],
+            )
+            return []
+        if "skip" in payload and "input" not in payload:
+            logger.info(
+                "generator skipped seed %s (grounding not substantive): %.200s",
+                seed.seed_id,
+                payload["skip"],
             )
             return []
         input_text = str(payload.get("input", "")).strip()
@@ -235,6 +258,27 @@ class LlmGenerator:
             )
         ]
 
+    def _retry_truncated(self, *, sys: str, human: str, gen_params: dict, seed_id: str):
+        """Re-run the same prompt with more completion budget; returns (payload, delta)."""
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        budget = int(gen_params.get("max_tokens") or _DEFAULT_MAX_TOKENS)
+        raised = min(budget * _TRUNCATION_HEADROOM, _MAX_RETRY_TOKENS)
+        logger.warning(
+            "generator hit max_tokens=%d before answering seed %s (reasoning used the "
+            "budget); retrying once with max_tokens=%d — raise generation_params.max_tokens "
+            "for reasoning models",
+            budget,
+            seed_id,
+            raised,
+        )
+        response = self._model.invoke(
+            [SystemMessage(content=sys), HumanMessage(content=human)],
+            **{**gen_params, "max_tokens": raised},
+        )
+        delta = self.usage.add_message(response) if self.usage is not None else None
+        return _parse_payload(_text(response)), delta
+
     def _reask(self, *, sys: str, human: str, prior: str, gen_params: dict):
         """Re-ask once with the rejected reply in context; returns (payload, delta)."""
         from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -250,6 +294,12 @@ class LlmGenerator:
         )
         delta = self.usage.add_message(response) if self.usage is not None else None
         return _parse_payload(_text(response)), delta
+
+
+def _finish_reason(response) -> str | None:
+    """The provider's stop reason from LangChain response metadata, if reported."""
+    metadata = getattr(response, "response_metadata", None) or {}
+    return metadata.get("finish_reason") or metadata.get("stop_reason")
 
 
 def _invoke_params(generation_params: dict) -> dict:

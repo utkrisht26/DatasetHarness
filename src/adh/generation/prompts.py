@@ -16,7 +16,19 @@ from .models import SeedPoint
 _SYSTEM = (
     "You are a dataset generation engine. You produce ONE high-quality training record "
     "as a single minified JSON object and nothing else — no prose, no markdown fences. "
-    "Ground every record in the provided context when present; never invent sources."
+    "Every record must be standalone: it teaches the topic itself to a reader who will "
+    "never see your reference material, so it never mentions a context, source, "
+    "excerpt, page, or document. Use reference material only to keep facts accurate; "
+    "never invent sources."
+)
+
+_GROUNDING_RULES = (
+    "Use the reference material above only to make the record accurate. Write a "
+    "standalone record about the Topic itself — the question must make sense to "
+    "someone who has never seen this material, and neither field may mention it "
+    '("the provided index", "this excerpt", "the source", ...). If the material '
+    "contains no substantive information about the Topic (e.g. a navigation page, "
+    'job listing, or unrelated subject), return {"skip": <one-line reason>} instead.'
 )
 
 _GROUNDING_BUDGET = 4000  # chars of retrieved grounding text to include
@@ -54,11 +66,8 @@ def generation_prompt(seed: SeedPoint, spec: JobSpec, *, grounding: str = "") ->
         f"Language: {spec.languages[0] if spec.languages else 'en'}.",
     ]
     if grounding.strip():
-        lines.append(
-            "\nGround the record ONLY in this source context:\n---\n"
-            + grounding[:_GROUNDING_BUDGET]
-            + "\n---"
-        )
+        lines.append("\nReference material:\n---\n" + grounding[:_GROUNDING_BUDGET] + "\n---\n")
+        lines.append(_GROUNDING_RULES)
     else:
         lines.append("\nNo source context is provided; generate from domain knowledge.")
     lines.append("\n" + _shape_instructions(tier, modality))

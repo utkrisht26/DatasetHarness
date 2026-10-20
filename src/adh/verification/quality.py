@@ -15,6 +15,17 @@ from collections import Counter
 from dataclasses import dataclass
 
 _WORD_RE = re.compile(r"\S+")
+# A record that talks about "the provided index" / "the supplied listing" / "this
+# excerpt" is about its grounding document, not the domain — it is meaningless to a
+# reader who never saw that context. "provided"/"supplied" alone are not enough
+# ("calls the provided closure" is fine), so a document noun must follow closely.
+_SOURCE_REFERENCE_RE = re.compile(
+    r"\b(?:the|this)\s+(?:provided|supplied)\s+(?:[\w'-]+\s+){0,4}?"
+    r"(?:context|source|text|excerpt|passage|document|index|listing|page|snippet|material|article)s?\b"
+    r"|\b(?:the|this)\s+excerpt\b"
+    r"|\bsource\s+context\b",
+    re.IGNORECASE,
+)
 _STOPWORDS = frozenset(
     "the a an and or but of to in on for with is are was were be been it this that "
     "as at by from you i we they he she".split()
@@ -73,6 +84,13 @@ class QualityFilter:
             if sw < self.min_stopword_ratio:
                 return QualityResult(False, f"stopword ratio {sw:.3f} < {self.min_stopword_ratio}")
 
+        return QualityResult(True, "")
+
+    def check_standalone(self, text: str) -> QualityResult:
+        """Reject text that refers to its grounding source instead of the subject."""
+        match = _SOURCE_REFERENCE_RE.search(text or "")
+        if match:
+            return QualityResult(False, f"refers to its source document: {match.group(0)!r}")
         return QualityResult(True, "")
 
     def _dup_line_ratio(self, text: str) -> float:

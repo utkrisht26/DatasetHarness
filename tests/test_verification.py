@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 
 from adh.contract import VerifiabilityTier, get_verifier_hook, load_record_schema
 from adh.generation import Candidate
@@ -76,6 +77,52 @@ def test_quality_rejects_symbol_soup_and_repetition():
 def test_quality_accepts_prose():
     q = QualityFilter()
     assert q.check("This is a natural sentence that a person could plausibly have written.").ok
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # verbatim heads from live run rust-async-live-small
+        "According to the provided index for the async book, is there a section on traits?",
+        "Can the supplied Rust Users help listing alone support an expert-level explanation?",
+        "The provided source is a topic index for the book; it does not explain traits.",
+        "This excerpt introduces asynchronous Rust but the source context omits Pin.",
+    ],
+)
+def test_standalone_check_rejects_records_about_their_source(text):
+    result = QualityFilter().check_standalone(text)
+    assert not result.ok
+    assert "source" in result.reason
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "In Rust's Pin API, what problem does Pin<&mut T> solve for self-referential futures?",
+        "Summarize the following text about Tokio's scheduler: workers steal tasks ...",
+        "Given a struct that is !Unpin, how do you safely project a pinned field?",
+    ],
+)
+def test_standalone_check_accepts_self_contained_records(text):
+    assert QualityFilter().check_standalone(text).ok
+
+
+def test_router_rejects_source_referencing_record_before_the_jury():
+    class CountingJudge(HeuristicJudge):
+        calls = 0
+
+        def evaluate(self, **kw):
+            CountingJudge.calls += 1
+            return super().evaluate(**kw)
+
+    cand = _cand(
+        input="According to the provided index, where is concurrency covered?",
+        output="The index lists spawn, join and select under concurrency and parallelism.",
+    )
+    verdict = VerificationRouter(spec=_spec(tier=2), judge=CountingJudge()).verify(cand)
+    assert not verdict.kept
+    assert verdict.stage == "quality"
+    assert CountingJudge.calls == 0
 
 
 # --------------------------------------------------------------------- tier 1 (hard)

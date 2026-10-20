@@ -57,6 +57,11 @@ class VerificationRouter:
         q = self.quality.check(candidate.output, modality=self.spec.modality)
         if not q.ok:
             return Verdict(False, STAGE_QUALITY, q.reason)
+        # media records describe a staged asset; text records must stand alone
+        if candidate.media is None:
+            s = self.quality.check_standalone(f"{candidate.input}\n{candidate.output}")
+            if not s.ok:
+                return Verdict(False, STAGE_QUALITY, s.reason)
 
         tier = candidate.verifiability_tier
         if tier == VerifiabilityTier.HARD:
