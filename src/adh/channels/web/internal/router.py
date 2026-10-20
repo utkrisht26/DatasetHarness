@@ -31,6 +31,8 @@ import threading
 from dataclasses import dataclass, field, replace
 from typing import Callable, Protocol
 
+from adh.junk import is_junk_url
+
 from .contracts import CrawlRequest, CrawlResponse
 from .policy import FrontierPolicy
 
@@ -319,7 +321,9 @@ class CrawlRouter:
             if not policy.link_filter(link.url, job.seed):
                 if job.on_event:
                     reason = "domain filter"
-                    if job.seed.allowed_locales:
+                    if is_junk_url(link.url, keywords=job.seed.keywords):
+                        reason = "junk source"
+                    elif job.seed.allowed_locales:
                         import re
                         from urllib.parse import urlparse
 

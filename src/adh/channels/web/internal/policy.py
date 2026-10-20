@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 from urllib.parse import urlparse
 
-from adh.discovery.junk import is_junk_url
+from adh.junk import is_junk_url
 
 from .contracts import CrawlRequest
 from .relevance import KeepAllJudge, RelevanceJudge

@@ -418,6 +418,32 @@ def test_locale_filter_is_opt_in_policy():
     ]
 
 
+def test_job_board_outlinks_are_pruned_as_junk_not_job_concepts():
+    """Default policy skips job-board links (reported as junk) but follows CI 'jobs' docs."""
+    svc = _SyncFakeService(
+        {
+            "https://docs.dj.com/ci/": (
+                "ci",
+                [
+                    "https://www.indeed.com/q-ci-jobs.html",  # job board
+                    "https://docs.dj.com/ci/jobs/",  # a technical page about CI jobs
+                ],
+            ),
+            "https://docs.dj.com/ci/jobs/": ("jobs", []),
+        }
+    )
+    events: list[tuple[str, str, dict]] = []
+    router = CrawlRouter(svc, workers=2, max_depth=2)
+    router.run_job(
+        CrawlRequest(url="https://docs.dj.com/ci/"),
+        max_pages=10,
+        on_event=lambda kind, url, data: events.append((kind, url, data)),
+    )
+    assert sorted(svc.crawled) == ["https://docs.dj.com/ci/", "https://docs.dj.com/ci/jobs/"]
+    pruned = {url: data["reason"] for kind, url, data in events if kind == "pruned"}
+    assert pruned == {"https://www.indeed.com/q-ci-jobs.html": "junk source"}
+
+
 def test_best_first_crawls_most_relevant_within_budget():
     svc = _SyncFakeService(
         {

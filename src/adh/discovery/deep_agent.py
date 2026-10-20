@@ -36,6 +36,7 @@ from typing import Annotated, Any, Callable
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from adh.contract import DiscoveryMode, JobSpec, SourceChannel
+from adh.junk import is_junk_source
 from adh.llm import TokenUsage, UsageTracker
 from adh.llm.response_logging import (
     bind_model_response_operation,
@@ -69,7 +70,6 @@ from .agent import (
     score_candidate,
     target_shape,
 )
-from .junk import is_junk_source
 from .models import Aspect, CandidateSource, FetchPlan, RankedSource, SourceEvaluation
 from .research import RESEARCH_TOOLS, DiscoveryResearchState
 
@@ -1374,7 +1374,7 @@ class DeepAgentDiscoveryAgent:
                 title=src.title,
                 snippet=src.snippet,
                 spec=spec,
-                aspect=aspects[src.aspect_index] if 0 <= src.aspect_index < len(aspects) else None,
+                aspect=aspects[src.aspect_index],  # index validated above
             )
             if junk:
                 notes.append(f"skip {src.locator}: junk source ({junk.reason})")

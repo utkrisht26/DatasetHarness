@@ -1,17 +1,18 @@
-"""Tests for heuristic junk source detection, filtering, and ranking (docs/memory.md §5)."""
+"""Tests for heuristic junk source detection, filtering, and ranking (docs/memory.md §4)."""
 
 from __future__ import annotations
 
 import copy
 from pathlib import Path
+
 import pytest
 
 from adh.contract import JobSpec, SourceChannel
 from adh.discovery import SourceDiscoveryAgent
-from adh.discovery.agent import dedupe_and_rank
-from adh.discovery.junk import is_junk_source
+from adh.discovery.agent import DiscoveryConfig, dedupe_and_rank, score_candidate
 from adh.discovery.models import CandidateSource, RankedSource, SourceEvaluation
-from adh.search import InMemoryDatasetRegistry, InMemorySearchProvider, SearchHit
+from adh.junk import is_junk_source, is_junk_url
+from adh.search import DatasetHit, InMemoryDatasetRegistry, InMemorySearchProvider, SearchHit
 
 DUMMY_PATH = Path(".")
 
@@ -281,6 +282,188 @@ def test_heuristic_discovery_filters_junk_sources_from_plan(minimal_spec_dict):
     assert "https://rust-lang.github.io/async-book/07_workarounds/05_async_in_traits.html" in urls
     assert "https://www.indeed.com/q-async-programming-jobs.html" not in urls
     assert "https://cryptorank.io/news/pin-ai" not in urls
+    # Filtering is visible in the plan, as it is for the deep agent.
+    junk_notes = [n for n in plan.notes if "junk source" in n]
+    assert any("indeed.com" in n for n in junk_notes)
+    assert any("cryptorank.io" in n for n in junk_notes)
+    assert len(junk_notes) == len(set(junk_notes))  # one note per URL, not per query
+
+
+# =====================================================================
+# Technical pages that share vocabulary with junk categories
+# =====================================================================
+# "Job" is a core term in CI, schedulers and orchestrators; ssh-keygen is not
+# warez; ML tutorials use stock data. A single weak signal never convicts.
+TECHNICAL_LOOKALIKES = [
+    (
+        "Tokio task scheduling internals",
+        "https://blog.example.dev/tokio-cron",
+        "Scheduling jobs in Tokio with tokio-cron-scheduler",
+        "Run periodic async tasks",
+    ),
+    (
+        "Kubernetes workload controllers",
+        "https://kubernetes.io/docs/concepts/workloads/controllers/job/",
+        "Jobs | Kubernetes",
+        "A Job creates one or more Pods and retries them until they succeed",
+    ),
+    (
+        "GitLab CI pipelines",
+        "https://docs.gitlab.com/ee/ci/jobs/",
+        "CI/CD jobs | GitLab",
+        "Pipeline configuration begins with jobs",
+    ),
+    (
+        "Distributed build systems",
+        "https://bazel.build/docs/parallel",
+        "Parallel builds",
+        "Bazel can run 8 jobs in parallel on one machine",
+    ),
+    (
+        "Linux system administration with SSH",
+        "https://www.ssh.com/academy/ssh/keygen",
+        "ssh-keygen - Generate a New SSH Key",
+        "ssh-keygen is a tool for creating new authentication key pairs",
+    ),
+    (
+        "Time-series forecasting with LSTMs",
+        "https://machinelearningmastery.com/lstm-forecast",
+        "Time series prediction with LSTM",
+        "Using stock market data as an example dataset",
+    ),
+]
+
+
+@pytest.mark.parametrize(("goal", "url", "title", "snippet"), TECHNICAL_LOOKALIKES)
+def test_technical_pages_sharing_junk_vocabulary_are_kept(
+    minimal_spec_dict, goal, url, title, snippet
+):
+    d = copy.deepcopy(minimal_spec_dict)
+    d["description"] = goal
+    verdict = is_junk_source(url, title=title, snippet=snippet, spec=JobSpec.model_validate(d))
+    assert not verdict, f"{url} wrongly flagged: {verdict.reason}"
+
+
+@pytest.mark.parametrize(
+    ("url", "title", "snippet", "category"),
+    [
+        # Unknown hosts need corroborating signals, but real listings have them.
+        (
+            "https://acme.dev/careers/senior-rust-engineer",
+            "Senior Rust Engineer",
+            "Full-time position on our platform team. Apply now.",
+            "job",
+        ),
+        (
+            "https://example-jobs-aggregator.net/rust",
+            "Now hiring: 120 Rust jobs in Berlin",
+            "Salary search for Rust developers",
+            "job",
+        ),
+        (
+            "https://coins.example.net/pin-ai",
+            "PIN AI price",
+            "Circulating supply, 24h trading volume and market cap rank",
+            "crypto",
+        ),
+        (
+            "https://wire.example.com/wimi",
+            "WiMi announces cloud scheduling (NASDAQ: WIMI)",
+            "Press release",
+            "stock",
+        ),
+        (
+            "https://downloads.example.ru/photoshop",
+            "Photoshop 2024 keygen",
+            "free download crack",
+            "spam",
+        ),
+    ],
+)
+def test_corroborated_junk_on_unknown_hosts_is_rejected(
+    minimal_spec_dict, url, title, snippet, category
+):
+    verdict = is_junk_source(url, title=title, snippet=snippet, spec=_rust_spec(minimal_spec_dict))
+    assert verdict
+    assert category in verdict.reason.lower()
+
+
+@pytest.mark.parametrize(
+    ("goal", "url"),
+    [
+        ("Wall Street analyst reports", "https://seekingalpha.com/article/123"),
+        ("Smart contract auditing in Solidity", "https://etherscan.io/address/0xabc"),
+        ("Business directory entries for SaaS vendors", "https://www.zoominfo.com/c/acme/1"),
+    ],
+)
+def test_multi_word_intent_terms_exempt_their_category(minimal_spec_dict, goal, url):
+    d = copy.deepcopy(minimal_spec_dict)
+    d["description"] = goal
+    assert not is_junk_source(url, spec=JobSpec.model_validate(d))
+
+
+def test_llm_token_goal_does_not_switch_off_crypto_filtering(minimal_spec_dict):
+    d = copy.deepcopy(minimal_spec_dict)
+    d["description"] = "LLM tokenizer training: BPE tokens and vocabularies"
+    verdict = is_junk_source(
+        "https://coinmarketcap.com/currencies/pin-ai/", spec=JobSpec.model_validate(d)
+    )
+    assert verdict and "crypto" in verdict.reason
+
+
+@pytest.mark.parametrize(
+    ("url", "keywords", "expected"),
+    [
+        ("https://www.indeed.com/viewjob?jk=1", (), True),
+        ("https://careers.example.com/rust", (), True),
+        ("https://www.linkedin.com/jobs/view/123", (), True),
+        ("https://www.rust-lang.org/careers/", (), True),
+        ("https://kubernetes.io/docs/concepts/workloads/controllers/job/", ("kubernetes",), False),
+        ("https://docs.gitlab.com/ee/ci/jobs/", ("gitlab", "ci"), False),
+        ("https://www.indeed.com/viewjob?jk=1", ("rust", "jobs"), False),
+    ],
+)
+def test_crawler_outlink_filter_blocks_job_sites_not_job_concepts(url, keywords, expected):
+    assert is_junk_url(url, keywords=keywords) is expected
+
+
+def test_dataset_candidates_are_not_junk_scored(minimal_spec_dict):
+    """Junk categories describe web pages; a matching dataset keeps its real evaluation."""
+    ds = DatasetHit(
+        dataset_id="org/rust-async-macros-qa",
+        locator="https://huggingface.co/datasets/org/rust-async-macros-qa",
+        title="Rust async macro Q/A",
+        description=(
+            "rust async macro design declarative procedural question-answering input output "
+            "(sources include a NASDAQ: RUST vendor press release)"
+        ),
+        license="MIT",
+        downloads=5000,
+        last_modified="2024-09-01",
+    )
+    agent = SourceDiscoveryAgent(
+        registry=InMemoryDatasetRegistry(datasets=[ds], samples={ds.dataset_id: ds.description}),
+        search=InMemorySearchProvider(),
+    )
+    plan = agent.discover(_rust_spec(minimal_spec_dict), DUMMY_PATH)
+
+    chosen = [s for s in plan.sources if s.candidate.locator == ds.locator]
+    assert chosen, f"dataset dropped; plan notes: {plan.notes}"
+    assert chosen[0].evaluation.license_ok
+    assert chosen[0].evaluation.score > 0
+
+
+def test_allowed_license_outranks_better_shaped_unknown_license_source():
+    """The license ladder: an allowed-license source beats a stronger-looking unknown one."""
+    config = DiscoveryConfig()
+    common = {"est_yield": 10, "channel": SourceChannel.WEB, "freshness_ok": True}
+    licensed = score_candidate(
+        shape_match=0.5, quality=0.5, license_ok=True, config=config, **common
+    )
+    unknown = score_candidate(
+        shape_match=0.9, quality=0.9, license_ok=False, config=config, **common
+    )
+    assert licensed > unknown
 
 
 # =====================================================================
