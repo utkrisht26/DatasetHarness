@@ -16,6 +16,7 @@ deduplicated, verified, training-ready dataset** with full provenance — at sca
 | File | What it is |
 |------|-----------|
 | [`GOAL.md`](./GOAL.md) | The north star — what the system is *for*, the input→output promise, and ready-to-paste briefs for Claude. **Start here.** |
+| [`docs/memory.md`](./docs/memory.md) | Current status handoff: what is done, what remains (prioritised), live-run results, and working conventions. **Read before picking up work.** |
 | [`PHASE0-CONTRACT.md`](./PHASE0-CONTRACT.md) | **LOCKED.** Verifiability tiers + Job Spec + Record Schema + provenance. The interface everything else is built against. |
 | [`OUTLINE.md`](./OUTLINE.md) | Full phased project plan (0–4), reuse-first stance, build order, risk table. |
 | [`PHASE1.md`](./PHASE1.md) | Engine A implementation notes: what was built, the port/adapter seams, and acceptance criteria → tests. |
@@ -30,14 +31,20 @@ deduplicated, verified, training-ready dataset** with full provenance — at sca
 - **Phase 0 — Contract:** ✅ locked (§0.8 open decisions resolved with the recommended options; see [`PHASE1.md`](./PHASE1.md))
 - **Phase 1 — Engine A (Discovery + Acquisition):** ✅ implemented in [`src/adh/`](./src/adh) — discovery loop, approval gate, three channels, saturation stop, circuit-breaker floor, durable resume, provenance/manifest. Reuse-libraries plug in as adapters. See [`PHASE1.md`](./PHASE1.md).
 - **Servicified + live discovery:** ✅ Engine A now runs as an HTTP gateway (`adh serve`) behind the approval gate, backed by a durable [`RunStore`](./src/adh/orchestration/run_store.py). Live **deepagents/LangGraph discovery** ([`DeepAgentDiscoveryAgent`](./src/adh/discovery/deep_agent.py) with heuristic fallback), a real **Crawl4AI** web channel, and **live token/cost metering** ([`UsageTracker`](./src/adh/llm/usage.py)) are wired — all previously deferred from Phase 1.
-- **Phases 2–4 (Engine B):** outlined
+- **Phases 2–4 (Engine B):** ✅ implemented — `adh build` (seeding → generation → tiered
+  verification → PII/dedup/decontamination → JSONL/Parquet + datasheet + Croissant + quality
+  report), `adh loop` (coverage-gap re-discovery), and `adh publish` (quality-gated Hub upload).
+- **Live runs:** end-to-end text datasets have been produced on a live model; open quality items
+  (self-judging, license coverage, scale) are tracked in [`docs/memory.md`](./docs/memory.md).
 
 ### Quickstart
 
 ```bash
-uv sync
+# The test suite imports the optional extras CI installs (all except evals/webvideo):
+uv sync --extra web --extra datasets --extra media --extra agents --extra search \
+        --extra verify --extra dedup --extra deliver --extra serve --extra publish --extra pii
 cp .env.example .env                              # optional deployment settings
-uv run pytest -q                                   # 600+ tests
+uv run pytest -q                                   # 800+ tests, offline, ~1 min
 uv run python examples/demo_offline.py             # end-to-end Engine A + Engine B, offline
 uv run adh discover examples/rust_async_macros.yaml
 uv run adh run examples/rust_async_macros.yaml --autonomous --no-fetch
@@ -79,7 +86,22 @@ is retained in `engine_b_summary.json` notes.
 After correcting a spec for a build that already exhausted its seeds, use
 `adh build examples/corrected-spec.yaml --work-dir runs/<run-id> --fresh` to regenerate from
 the existing corpus. This resets Engine B's generation checkpoints; it does not repeat discovery
-or crawling. Back up any previous dataset output before rebuilding it.
+or crawling. Back up any previous dataset output before rebuilding it. A rebuild removes split
+files the previous build wrote but the new one does not (e.g. a stale `validation.parquet`), so
+the dataset folder always matches its manifest.
+
+#### Live models
+
+- **Reasoning models** spend part of `max_tokens` thinking before they answer. Set
+  `generation_params.max_tokens` generously in the spec (16384 worked for MiniMax M3.1 Flash).
+  A reply cut off at the limit is retried once with 8× the budget, capped at 32,768 tokens.
+- **Every model request times out after 600 s**, so a stalled connection cannot hang a build.
+  Pass `timeout=` to `build_chat_model` to override.
+- **Records are standalone.** The generator writes records that never mention their source
+  material, and returns a skip for grounding chunks with nothing to teach (navigation pages,
+  job listings); the quality filter rejects records that refer to "the provided context".
+- Run long builds with an absolute `--work-dir`. Relative spec paths (`record_schema_ref`,
+  `rubric_ref`, `decontaminate_against`) resolve against the spec file's directory.
 
 ### Development checks
 
@@ -94,6 +116,15 @@ uv run pre-commit run --all-files
 Pre-commit fixes trailing whitespace, missing final newlines, UTF-8 byte-order marks, and mixed
 line endings. It also validates common configuration formats and runs Ruff lint fixes followed by
 Ruff formatting for Python files.
+
+The test suite is hermetic: [`tests/conftest.py`](./tests/conftest.py) disables `.env` loading,
+removes `ADH_*` and provider-key variables, and replaces live search/registry ports with
+in-memory stubs, so tests never make live or billed calls. Tests that need configuration set it
+with `monkeypatch.setenv`.
+
+CI ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs the pre-commit hooks and the
+full test suite on every pull request and on pushes to `main`. It installs every extra except
+`evals` and `webvideo`, plus spaCy's `en_core_web_lg` model for Presidio.
 
 ## Media datasets (video & images — open-internet acquisition)
 
@@ -168,6 +199,12 @@ surface an explicit coverage-gap note rather than silently degrading to a text c
   the discovery loop + orchestration glue + the contract + the tiered verifier + provenance.
 - **Verifiability tier is a first-class job parameter** (hard / soft / hybrid) — it selects the
   verification sub-graph.
+- **Junk sources are filtered before acquisition:** job boards, crypto price trackers,
+  stock-ticker news wires, company-profile databases, and spam
+  ([`junk.py`](./src/adh/junk.py)). A known junk domain is decisive; otherwise page text needs a
+  strong signal ("apply now", "circulating supply"), and vocabulary shared with technical writing
+  (a `/jobs/` path, "stock market") only corroborates. A category is exempt when the goal is
+  about it. Every skip is recorded in the plan notes as `skip <url>: junk source (<reason>)`.
 - **Coverage-saturation is the primary stop signal**, hard limits are the circuit-breaker floor.
 - **Documentation is a byproduct:** Datasheet + Croissant + dataset card auto-emitted from the Job Spec.
 
