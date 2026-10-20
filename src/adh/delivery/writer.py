@@ -100,6 +100,7 @@ def write_dataset(
     out.mkdir(parents=True, exist_ok=True)
     fmt = (spec.output_format or "jsonl").lower()
     notes: list[str] = []
+    prior_paths = _manifest_paths(out / "manifest.jsonl")
 
     by_split: dict[str, list[Record]] = defaultdict(list)
     for r in records:
@@ -190,6 +191,11 @@ def write_dataset(
         for row in [*manifest_rows, *asset_rows]:
             fh.write(json.dumps(row) + "\n")
 
+    current = {row["path"] for row in [*manifest_rows, *asset_rows]}
+    removed = _remove_stale(out, prior_paths - current)
+    if removed:
+        notes.append(f"removed {removed} file(s) left by the previous build of this dataset")
+
     return DeliveryResult(
         output_dir=out,
         format=fmt,
@@ -198,6 +204,41 @@ def write_dataset(
         manifest_path=manifest_path,
         notes=notes,
     )
+
+
+def _manifest_paths(manifest_path: Path) -> set[str]:
+    """Shard/asset paths a previous build's manifest listed (empty when none)."""
+    if not manifest_path.exists():
+        return set()
+    paths: set[str] = set()
+    for line in manifest_path.read_text(encoding="utf-8").splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue  # cleanup is best-effort; a torn line just isn't cleaned
+        if isinstance(row, dict) and row.get("kind") in {"shard", "asset"}:
+            path = row.get("path")
+            if isinstance(path, str) and path:
+                paths.add(path)
+    return paths
+
+
+def _remove_stale(out: Path, stale: set[str]) -> int:
+    """Delete stale files that resolve inside ``out``; returns how many were removed.
+
+    A rebuild whose splits changed (train/validation -> train/test) would otherwise
+    leave orphan shards that split-autodetecting loaders pick up as real data.
+    Paths are confined to ``out`` so a hostile manifest cannot delete elsewhere.
+    """
+    root = out.resolve()
+    removed = 0
+    for rel in sorted(stale):
+        target = (out / rel).resolve()
+        if not target.is_relative_to(root) or not target.is_file():
+            continue
+        target.unlink()
+        removed += 1
+    return removed
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
