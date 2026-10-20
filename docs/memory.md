@@ -59,11 +59,9 @@ adh serve --runs-dir ./runs                      # API for the frontend
 - Frontend operator console (separate repo): submit, approve, monitor, restart / edit-restart, dataset panel
 
 ### Tests / quality
-- ~690 test functions under `tests/`; full suite green, ruff check + ruff format clean, pre-commit hooks installed
-- **Caveat:** `tests/test_cli.py::test_cli_discover_prints_plan` is **not hermetic**: it loads `.env` and makes live LLM calls (it can hang or burn quota). Run the suite with:
-  ```bash
-  uv run pytest -q --deselect tests/test_cli.py::test_cli_discover_prints_plan
-  ```
+- ~690 test functions under `tests/`; full suite green (`uv run pytest -q`, ~1 min), ruff check + ruff format clean, pre-commit hooks installed
+- The suite is **hermetic**: an autouse fixture in `tests/conftest.py` disables `.env` loading, strips `ADH_*` and provider-key variables, and swaps live discovery ports (Tavily / HF Hub) for in-memory stubs. Tests that need configuration set it with `monkeypatch.setenv`.
+- **CI:** `.github/workflows/ci.yml` runs pre-commit (ruff + file hygiene) and the full test suite on every PR and on pushes to `main`. It installs every extra except `evals` and `webvideo`, plus spaCy's `en_core_web_lg` for Presidio.
 
 ### Live end-to-end runs that worked
 | Run | Result |
@@ -124,7 +122,7 @@ specs must set `generation_params.max_tokens: 16384`. It is slow: about 3 to 4 m
 
 ### Immediate (where work stopped)
 1. **Open a PR** for `fix/live-run-quality` into `main` (pushed, PR not yet created): https://github.com/utkrisht26/DatasetHarness/pull/new/fix/live-run-quality
-2. **Make `test_cli_discover_prints_plan` hermetic** (stub the model / force `--no-llm`, don't load the real `.env`).
+2. **Confirm the first CI run is green** on the PR. The workflow was written and its lint step checked locally, but the clean-machine install is only exercised on GitHub.
 
 ### Dataset quality
 3. **Self-judging:** the generator and the judge are the same model family. The jury once scored a non-answer 5/5/5, and accepted records have shown helpfulness 2.5 carried by clarity 5. Add a judge from a **different model family** to `ADH_JUDGE_MODELS`, and consider a per-dimension floor (not only the mean ≥ `min_score`).
@@ -136,7 +134,7 @@ specs must set `generation_params.max_tokens: 16384`. It is slow: about 3 to 4 m
 ### Scale / ops
 8. **`cost_usd` is always null** for OpenRouter responses, so `limits.max_cost_usd` can never trip. Read cost from the provider's usage payload or a price table.
 9. **Bigger run:** 5 records proves the pipeline; a real training set needs a larger `target_size` (and a paid or faster model). Partial-success builds cannot be topped up by re-running `build` (resume skips completed seeds); use `adh loop`.
-10. **No CI** (GitHub Actions running ruff + pytest), and **no frontend tests**.
+10. **No frontend tests**, and the frontend repo has no CI.
 11. **Media:** VLM captioning for video/image records (captions currently come from source metadata); a live Pexels run needs `PEXELS_API_KEY`.
 12. Publishing has **no HTTP route** by design (uploads need an auth layer); CLI only.
 
