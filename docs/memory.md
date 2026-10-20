@@ -72,7 +72,7 @@ adh serve --runs-dir ./runs                      # API for the frontend
 
 `runs/` is gitignored, so these exist only on the original machine.
 
-### Latest branch: `fix/live-run-quality` (6 commits on top of `8cd69d1`)
+### Latest branch: `fix/live-run-quality` (on top of `8cd69d1`)
 All found by the live run, all fixed test-first:
 
 | Commit | Fix |
@@ -83,7 +83,7 @@ All found by the live run, all fixed test-first:
 | `49adc6d` | Any `finish_reason` = `length`/`max_tokens` (empty **or** partial JSON) retries once with 8x `max_tokens`, capped at 32,768 |
 | `a7be0f4` | Every model request has a default 600 s timeout (`DEFAULT_REQUEST_TIMEOUT_S` in `llm/models.py`); a build once hung 38 min on a stalled socket |
 | `efe0c5c` | `write_dataset` removes shards that the previous manifest listed but the new build doesn't write (a stale `validation.parquet` was being picked up by the HF loader); never deletes outside the dataset dir |
-| `2f39028` | Goal-aware junk source filtering (`adh.discovery.junk`: job boards, crypto trackers, stock ticker news, company directories, spam) in heuristic discovery, deep agent, and crawler frontier; tie-breaking ranking |
+| `2f39028` + follow-up | Goal-aware junk source filtering ([src/adh/junk.py](../src/adh/junk.py)): job boards, crypto trackers, stock-ticker news, company directories, spam. A known junk domain is decisive; otherwise path/text **strong** signals ("apply now", "circulating supply", "(NASDAQ: X)") are needed and **weak** ones ("/jobs/" path, "8 jobs", "stock market") only corroborate; job pages need two signals. A category is exempt when the goal is about it (spam never). Applied to web search hits in heuristic and deep discovery (each skip is a plan note) and to crawler outlinks (known domains, `jobs.`/`careers.` hosts, `/careers/`; pruned as "junk source"). Regression tests pin the live-run junk and six technical look-alikes (Kubernetes Jobs, GitLab CI jobs, ssh-keygen, ...). Ranking tie-break on assessment; license penalty stays 0.5 |
 
 ---
 
@@ -128,7 +128,7 @@ specs must set `generation_params.max_tokens: 16384`. It is slow: about 3 to 4 m
 ### Dataset quality
 3. **Self-judging:** the generator and the judge are the same model family. The jury once scored a non-answer 5/5/5, and accepted records have shown helpfulness 2.5 carried by clarity 5. Add a judge from a **different model family** to `ADH_JUDGE_MODELS`, and consider a per-dimension floor (not only the mean ≥ `min_score`).
 4. **License coverage is 0%** for web records (all `unknown`), so a public publish is refused. Needs license detection for crawled pages (page metadata / footer / known-domain table) or an allowlist of known-licensed sources.
-5. ~~**Junk sources** (job boards, crypto sites)~~ — **DONE** (`2f39028`): goal-aware classifier (`src/adh/discovery/junk.py`) filters job boards, crypto trackers, stock tickers, business directories, and spam early in heuristic discovery, deep agent report mapping, and crawler frontier (`domain_filter`).
+5. ~~**Junk sources** (job boards, crypto sites)~~ — **DONE** (`2f39028` + follow-up, see §2). Not yet validated on a live run; watch the plan notes (`skip <url>: junk source (...)`) for wrongly skipped pages. Known gap: `adh.channels.base` imports `adh.discovery.models`, so the crawler still depends on the discovery package (pre-existing).
 6. **Heuristic aspect decomposition** takes goal text literally (see the gotchas above); it should extract topics, not sentences.
 7. **Judge 429s look like rejections:** a rate-limited judge abstains with score 0, which is counted as a jury rejection. It should surface as an outage (retry / pause), not a quality drop.
 
