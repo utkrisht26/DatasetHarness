@@ -61,6 +61,7 @@ The main settings are:
 | `TAVILY_API_KEY`, `PEXELS_API_KEY`, `OPENVERSE_API_KEY` | Discovery/media providers. |
 | `ADH_API_KEY`, `ADH_CORS_ORIGINS` | Gateway authentication and allowed browser origins. |
 | `ADH_LOG_LEVEL` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
+| `ADH_PII_ENTITIES` | Comma-separated Presidio entity types to redact; default is direct identifiers only (email, phone, card, IBAN, IP, SSN…). Add `PERSON` for datasets about people. |
 
 Provider-native credentials such as `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` continue to be read
 by their SDKs. Job-specific settings—including discovery policy, model ladders, limits, schemas,

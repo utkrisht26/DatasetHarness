@@ -270,3 +270,58 @@ def test_presidio_redactor_integration_minimal():
     redacted = redactor.redact(text, entities)
     assert "jane.doe@example.org" not in redacted
     assert "<EMAIL_ADDRESS>" in redacted
+
+
+def _presidio_redactor(**kw):
+    pytest.importorskip("presidio_analyzer")
+    pytest.importorskip("presidio_anonymizer")
+    from adh.curation.pii import PresidioRedactor
+
+    try:
+        return PresidioRedactor(**kw)
+    except ConfigurationError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - model binaries are a deploy concern
+        pytest.skip(f"presidio NER model unavailable in this environment: {exc}")
+
+
+def test_default_presidio_entities_leave_technical_text_intact():
+    # Live run rust-async-live-small: generic NER turned Rust -> <DATE_TIME>,
+    # Unpin/Axum -> <PERSON>, Tokio -> <LOCATION>, TCP -> <NRP> and every URL ->
+    # <URL> — 23 detections, all false positives. Defaults are direct identifiers.
+    redactor = _presidio_redactor()
+    technical = (
+        "In Rust's Pin API, when T: Unpin, Pin<&mut T> behaves like &mut T. "
+        "Tokio schedules tasks; Axum binds a TCP listener on port 3000. "
+        "See https://docs.rs/tokio/latest/tokio/task/ for details."
+    )
+    assert redactor.analyze(technical) == []
+
+    personal = "Contact jane.doe@example.org; my phone number is (212) 736-5000."
+    found = {e.entity_type for e in redactor.analyze(personal)}
+    assert {"EMAIL_ADDRESS", "PHONE_NUMBER"} <= found
+
+
+def test_default_entity_set_is_direct_identifiers_only():
+    from adh.curation.pii import DEFAULT_PII_ENTITIES
+
+    assert "EMAIL_ADDRESS" in DEFAULT_PII_ENTITIES
+    assert "CREDIT_CARD" in DEFAULT_PII_ENTITIES
+    for noisy in ("PERSON", "LOCATION", "DATE_TIME", "NRP", "URL"):
+        assert noisy not in DEFAULT_PII_ENTITIES
+
+
+def test_pii_entities_env_override_reaches_the_redactor(monkeypatch):
+    pytest.importorskip("presidio_analyzer")
+    monkeypatch.setenv("ADH_PII_ENTITIES", "person, EMAIL_ADDRESS")
+    try:
+        redactor = resolve_redactor(_spec(pii_policy="redact"))
+    except OSError as exc:  # spaCy model missing
+        pytest.skip(f"presidio NER model unavailable in this environment: {exc}")
+    assert redactor is not None
+    assert redactor.entities == ("PERSON", "EMAIL_ADDRESS")
+
+
+def test_unknown_pii_entity_fails_fast():
+    with pytest.raises(ConfigurationError, match="NOT_AN_ENTITY"):
+        _presidio_redactor(entities=["EMAIL_ADDRESS", "NOT_AN_ENTITY"])

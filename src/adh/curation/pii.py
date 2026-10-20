@@ -27,12 +27,36 @@ from typing import Protocol, runtime_checkable
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "DEFAULT_PII_ENTITIES",
     "ConfigurationError",
     "PIIEntity",
     "PIIRedactor",
     "PresidioRedactor",
     "resolve_redactor",
 ]
+
+# Direct identifiers only: Presidio's pattern + checksum recognizers, which are
+# high-precision on any text. Generic-NER types (PERSON, LOCATION, DATE_TIME, NRP)
+# and URL are excluded — on technical corpora they misfire on crate/trait names
+# ("Unpin" -> PERSON, "Tokio" -> LOCATION, "Rust" -> DATE_TIME) and redacting URLs
+# destroys content. Deployments whose data is about people opt back in via
+# ADH_PII_ENTITIES (e.g. "PERSON,EMAIL_ADDRESS,PHONE_NUMBER").
+DEFAULT_PII_ENTITIES: tuple[str, ...] = (
+    "EMAIL_ADDRESS",
+    "PHONE_NUMBER",
+    "CREDIT_CARD",
+    "IBAN_CODE",
+    "IP_ADDRESS",
+    "MAC_ADDRESS",
+    "CRYPTO",
+    "US_SSN",
+    "US_ITIN",
+    "US_PASSPORT",
+    "US_DRIVER_LICENSE",
+    "US_BANK_NUMBER",
+    "MEDICAL_LICENSE",
+    "UK_NHS",
+)
 
 
 class ConfigurationError(RuntimeError):
@@ -117,27 +141,43 @@ def resolve_redactor(
         if notes is not None:
             notes.append(message)
         return None
-    return PresidioRedactor()
+    from adh.settings import get_settings
+
+    return PresidioRedactor(entities=get_settings().pii_entities or None)
 
 
 class PresidioRedactor:
-    """:class:`PIIRedactor` over presidio-analyzer NER + marker redaction."""
+    """:class:`PIIRedactor` over presidio-analyzer NER + marker redaction.
+
+    ``entities`` defaults to :data:`DEFAULT_PII_ENTITIES`; names the analyzer does
+    not support raise :class:`ConfigurationError` up front rather than mid-build.
+    """
 
     name = "presidio"
 
-    def __init__(self, entities: list[str] | None = None, score_threshold: float = 0.5) -> None:
+    def __init__(
+        self, entities: list[str] | tuple[str, ...] | None = None, score_threshold: float = 0.5
+    ) -> None:
         _import_presidio()
         from presidio_analyzer import AnalyzerEngine
 
-        self._entities = list(entities) if entities else None
-        self._threshold = score_threshold
         self._analyzer = AnalyzerEngine()
+        self._entities = tuple(entities) if entities else DEFAULT_PII_ENTITIES
+        unknown = sorted(set(self._entities) - set(self._analyzer.get_supported_entities()))
+        if unknown:
+            raise ConfigurationError(f"unsupported PII entity type(s): {', '.join(unknown)}")
+        self._threshold = score_threshold
+
+    @property
+    def entities(self) -> tuple[str, ...]:
+        """The entity types this redactor screens for."""
+        return self._entities
 
     def analyze(self, text: str) -> list[PIIEntity]:
         results = self._analyzer.analyze(
             text=text,
             language="en",
-            entities=self._entities,
+            entities=list(self._entities),
             score_threshold=self._threshold,
         )
         return [PIIEntity(r.entity_type, r.start, r.end, r.score) for r in results]
