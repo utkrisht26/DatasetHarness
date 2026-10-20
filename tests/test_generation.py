@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 
 from adh.contract import SourceChannel, VerifiabilityTier
 from adh.corpus import CorpusChunk, SynthesisHandoff
@@ -329,10 +331,17 @@ def test_llm_generator_gives_up_after_one_reask(caplog):
     assert heads and "still no json here" in heads[-1].getMessage()
 
 
-def test_llm_generator_retries_reasoning_truncation_with_more_headroom(caplog):
-    """Live run: a reasoning model spent all max_tokens=1024 thinking (finish_reason
-    'length', empty content); the JSON-correction re-ask at the same budget failed
-    identically. Truncation must instead retry once with a larger token budget."""
+@pytest.mark.parametrize(
+    "truncated",
+    [
+        "",  # all budget spent reasoning (live, max_tokens=1024 and 8192)
+        '{"input":"Explain Rust\'s async execution model for an expert',  # cut mid-JSON
+    ],
+)
+def test_llm_generator_retries_reasoning_truncation_with_more_headroom(caplog, truncated):
+    """Live runs: a reasoning model hit max_tokens (finish_reason 'length') with no
+    content, or mid-way through the JSON; the JSON-correction re-ask at the same
+    budget failed identically. Truncation must instead retry with a larger budget."""
     import json
     import logging
 
@@ -345,7 +354,7 @@ def test_llm_generator_retries_reasoning_truncation_with_more_headroom(caplog):
         def __init__(self):
             self.calls = []
             self.replies = [
-                _Reply("", "length"),
+                _Reply(truncated, "length"),
                 _Reply(
                     json.dumps({"input": "What does Pin guarantee?", "output": "No moves."}), "stop"
                 ),
@@ -357,7 +366,7 @@ def test_llm_generator_retries_reasoning_truncation_with_more_headroom(caplog):
 
     gen = _scripted_llm([])
     gen._model = _BudgetModel()
-    spec = _spec(tier=2)
+    spec = _spec(tier=2, generation_params={"max_tokens": 16384})
 
     with caplog.at_level(logging.WARNING, logger="adh.generation.generator"):
         cands = gen.generate(_one_seed(), spec=spec)

@@ -157,11 +157,11 @@ _CORRECTION = (
 )
 
 # A reasoning model can spend its whole completion budget thinking and return no
-# content (finish_reason "length"). Re-asking at the same budget fails identically,
-# so the single retry gets this many times the headroom instead (bounded).
+# (or half-written) content (finish_reason "length"). Re-asking at the same budget
+# fails identically, so the single retry gets this many times the headroom (bounded).
 _TRUNCATION_HEADROOM = 8
 _DEFAULT_MAX_TOKENS = 1024
-_MAX_RETRY_TOKENS = 16_384
+_MAX_RETRY_TOKENS = 32_768
 _TRUNCATION_REASONS = frozenset({"length", "max_tokens"})  # OpenAI / Anthropic
 
 
@@ -196,11 +196,11 @@ class LlmGenerator:
         text = _text(response)
         payload = _parse_payload(text)
         if payload is None:
-            # One bounded retry. Truncated-before-answering gets more token headroom;
+            # One bounded retry. A reply cut off by the token limit gets more headroom;
             # otherwise a corrective re-ask, since providers intermittently wrap or drop
             # the JSON despite the system prompt (b6b176e6 lost ~a third of its calls
             # this way). Still unparseable -> return empty and let routing escalate.
-            if not text.strip() and _finish_reason(response) in _TRUNCATION_REASONS:
+            if _finish_reason(response) in _TRUNCATION_REASONS:
                 payload, delta_re = self._retry_truncated(
                     sys=sys, human=human, gen_params=gen_params, seed_id=seed.seed_id
                 )
@@ -265,9 +265,9 @@ class LlmGenerator:
         budget = int(gen_params.get("max_tokens") or _DEFAULT_MAX_TOKENS)
         raised = min(budget * _TRUNCATION_HEADROOM, _MAX_RETRY_TOKENS)
         logger.warning(
-            "generator hit max_tokens=%d before answering seed %s (reasoning used the "
-            "budget); retrying once with max_tokens=%d — raise generation_params.max_tokens "
-            "for reasoning models",
+            "generator hit max_tokens=%d before finishing seed %s (reasoning models spend "
+            "budget thinking); retrying once with max_tokens=%d — raise "
+            "generation_params.max_tokens for reasoning models",
             budget,
             seed_id,
             raised,
