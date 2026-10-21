@@ -370,6 +370,7 @@ def _acquire(
         clock=wallclock,
         governor=governor,
         staging_root=work / "media_staging",
+        aspect_terms={a.aspect_id: (a.topic, *a.keywords) for a in approved.aspects},
     )
 
     pending_ids = [s.source_id for s in approved.sources if not state.is_done(s.source_id)]

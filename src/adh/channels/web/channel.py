@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable, Callable
+from typing import Callable, Mapping, Protocol, runtime_checkable
 
 from adh.contract import SourceChannel
 from adh.corpus import CorpusChunk, offload
@@ -96,6 +96,9 @@ class Crawl4AIContentFetcher:
     # site-agnostic drift control — pass a Bm25RelevanceJudge / LlmRelevanceJudge.
     judge: RelevanceJudge | None = None
     content_threshold: float = 0.0
+    # Followed pages with fewer tokens than this are not kept (their links still are
+    # followed: navigation pages are how a crawl reaches articles). 0 = keep all.
+    min_content_tokens: int = 0
     # Pre-fetch URL/anchor keyword scoring (cheap prioritisation; brittle on sites that
     # don't encode topic in the path). Off by default.
     score_urls_by_keyword: bool = False
@@ -151,6 +154,7 @@ class Crawl4AIContentFetcher:
             request,
             judge=self.judge,
             content_threshold=self.content_threshold,
+            min_content_tokens=self.min_content_tokens,
             score_urls_by_keyword=self.score_urls_by_keyword,
             url_threshold=self.url_threshold,
             collapse_versions=self.collapse_versions,
@@ -219,18 +223,23 @@ def _build_request(source: RankedSource, ctx: FetchContext) -> CrawlRequest:
         respect_robots_txt=c.respect_robots_txt,
         include_domains=tuple(c.include_domains) or None,
         exclude_domains=tuple(c.exclude_domains) or None,
-        keywords=_relevance_keywords(source),
+        keywords=_relevance_keywords(source, ctx.aspect_terms),
         allowed_locales=tuple(ctx.spec.languages),
     )
 
 
-def _relevance_keywords(source: RankedSource) -> tuple[str, ...]:
-    """The aspect vocabulary that steers the deep-crawl frontier.
+def _relevance_keywords(
+    source: RankedSource, aspect_terms: Mapping[str, tuple[str, ...]]
+) -> tuple[str, ...]:
+    """The vocabulary that steers the deep-crawl frontier and judges followed pages.
 
-    Discovery's per-source signal — title, aspect id, and snippet — is exactly what
-    "this source is about" means, so we reuse it to score outlink relevance. (When
-    discovery attaches richer ``Aspect.keywords`` upstream, they flow in here too.)
+    The plan's aspect topic + keywords when known: a short, focused query is what the
+    BM25 coverage judge separates on (live run rust-async-50). Without a plan, fall
+    back to discovery's per-source signal — title, aspect id, and snippet.
     """
+    terms = aspect_terms.get(source.candidate.aspect_id)
+    if terms:
+        return terms
     cand = source.candidate
     aspect_words = cand.aspect_id.replace("-", " ").replace("_", " ")
     return tuple(p for p in (cand.title, aspect_words, cand.snippet) if p)

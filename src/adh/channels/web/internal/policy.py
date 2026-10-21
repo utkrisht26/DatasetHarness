@@ -132,6 +132,9 @@ class FrontierPolicy:
     judge: RelevanceJudge = field(default_factory=KeepAllJudge)
     content_threshold: float = 0.0
     query: str = ""
+    # Followed pages under this many tokens are not kept, but their links are still
+    # followed (navigation pages lead to articles). The seed is always kept.
+    min_content_tokens: int = 0
 
 
 def assemble_policy(
@@ -139,6 +142,7 @@ def assemble_policy(
     *,
     judge: RelevanceJudge | None = None,
     content_threshold: float = 0.0,
+    min_content_tokens: int = 0,
     score_urls_by_keyword: bool = False,
     url_threshold: float = 0.0,
     collapse_versions: bool = False,
@@ -167,4 +171,5 @@ def assemble_policy(
         judge=judge or KeepAllJudge(),
         content_threshold=content_threshold,
         query=" ".join(request.keywords),
+        min_content_tokens=min_content_tokens,
     )

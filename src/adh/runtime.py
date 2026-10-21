@@ -100,6 +100,34 @@ def _live_media_providers() -> tuple[list, list[str]]:
     return providers, gaps
 
 
+# Followed-page gates for live crawls, calibrated on live run rust-async-50 (pages
+# the generator skipped as non-substantive vs pages that produced records, judged
+# against the aspect's topic + keywords): BM25 >= 0.35 plus >= 200 tokens kept 11/11
+# productive followed pages and dropped 50/60 skipped ones. Seeds are always kept.
+LIVE_CONTENT_THRESHOLD = 0.35
+LIVE_MIN_CONTENT_TOKENS = 200
+
+
+def _live_web_fetcher():
+    from adh.channels.web import Crawl4AIContentFetcher
+
+    try:
+        import rank_bm25  # noqa: F401 - the BM25 judge's backend (the `web` extra)
+    except ImportError:
+        print(
+            "[adh] rank_bm25 missing: followed pages are not relevance-judged",
+            file=sys.stderr,
+        )
+        return Crawl4AIContentFetcher(min_content_tokens=LIVE_MIN_CONTENT_TOKENS)
+    from adh.channels.web.internal.relevance import Bm25RelevanceJudge
+
+    return Crawl4AIContentFetcher(
+        judge=Bm25RelevanceJudge(),
+        content_threshold=LIVE_CONTENT_THRESHOLD,
+        min_content_tokens=LIVE_MIN_CONTENT_TOKENS,
+    )
+
+
 def live_channels() -> dict:
     """Wire real acquisition channels when their extras are importable."""
     from adh.contract import SourceChannel
@@ -107,9 +135,8 @@ def live_channels() -> dict:
     channels: dict = {}
     try:
         from adh.channels import WebChannel
-        from adh.channels.web import Crawl4AIContentFetcher
 
-        channels[SourceChannel.WEB] = WebChannel(fetcher=Crawl4AIContentFetcher())
+        channels[SourceChannel.WEB] = WebChannel(fetcher=_live_web_fetcher())
     except Exception as exc:  # pragma: no cover - needs the web extra
         print(f"[adh] web channel unavailable: {exc}", file=sys.stderr)
     try:

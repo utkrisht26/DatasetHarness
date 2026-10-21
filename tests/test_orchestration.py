@@ -289,6 +289,45 @@ def test_engine_a_page_budget_is_shared_fairly_across_sources(minimal_spec_dict,
     assert sites == {"site0.dev", "site1.dev", "site2.dev"}
 
 
+def test_engine_a_hands_channels_each_aspects_vocabulary(minimal_spec_dict, tmp_path):
+    from adh.orchestration.run_store import load_plan
+
+    d = copy.deepcopy(minimal_spec_dict)
+    d["description"] = "Tokio runtime internals scheduler tasks."
+    d["motivation"] = "teach tokio"
+    spec = JobSpec.model_validate(d)
+    search = InMemorySearchProvider(
+        pages=[
+            SearchHit(
+                url="https://tokio.rs/blog/scheduler",
+                title="Tokio runtime internals scheduler",
+                snippet="tokio runtime internals scheduler tasks",
+                published="2024-02-01",
+                license_hint="MIT",
+            )
+        ]
+    )
+
+    class _Capturing:
+        name = SourceChannel.WEB
+        terms = None
+
+        def fetch(self, source, ctx):
+            type(self).terms = ctx.aspect_terms
+            return []
+
+    run_engine_a(
+        spec,
+        work_dir=tmp_path,
+        agent=SourceDiscoveryAgent(registry=InMemoryDatasetRegistry(), search=search),
+        channels={SourceChannel.WEB: _Capturing()},
+        approver=AutoApprover(),
+    )
+
+    plan = load_plan(tmp_path)
+    assert _Capturing.terms == {a.aspect_id: (a.topic, *a.keywords) for a in plan.aspects}
+
+
 def test_engine_a_saturation_skips_remaining_web(minimal_spec_dict, tmp_path):
     d = copy.deepcopy(minimal_spec_dict)
     d["description"] = "Tokio runtime internals scheduler tasks."
