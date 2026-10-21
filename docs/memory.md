@@ -4,7 +4,7 @@
 > or as a new contributor. It records what is done, what is open, and exactly where work stopped.
 > Update the "Last updated" line and the relevant sections whenever you finish a chunk of work.
 
-**Last updated:** 2026-10-20
+**Last updated:** 2026-10-21
 **Active branch:** `fix/live-run-quality` (pushed to `origin`; **no PR opened yet, not merged** into `main`)
 **Remote:** `github.com/utkrisht26/DatasetHarness`
 **Frontend:** separate repo at `../adh-frontend` (React + Vite operator console, last commit "complete phase 2 operator console")
@@ -68,7 +68,8 @@ adh serve --runs-dir ./runs                      # API for the frontend
 |---|---|
 | `runs/live-gate-2` | Engine A live gate: 123 web chunks, 29/29 sources approved |
 | `runs/Image-to-video-dance-dataset-b6b176e6` | First live Engine B dataset: 13 records (Aug 2026) |
-| `runs/rust-async-live-small` | **Latest (2026-10-20):** 5 clean standalone records (train 4 / test 1), 0 PII markers, junk sources skipped. Funnel: 8 generated, 1 dropped by the quality filter, 2 rejected by the jury, 4 seeds skipped as junk grounding |
+| `runs/rust-async-live-small` | 5 clean standalone records (train 4 / test 1), 0 PII markers, junk sources skipped. Funnel: 8 generated, 1 dropped by the quality filter, 2 rejected by the jury, 4 seeds skipped as junk grounding |
+| `runs/rust-async-50` | **Latest (2026-10-21), target 50:** 25 records (train 21 / val 3 / test 1), free MiniMax for generator + judge, ~31k tokens per kept record. 150 seeds: 98 skipped (navigation pages), 52 generated, 17 dropped by the quality filter, 10 by the jury. Junk filter skipped 7 sources live, all correctly. The crawl and quality-filter fixes below were made **after** this run; it has not been re-run. Thin aspects: a0, a1, a4, a5 |
 
 `runs/` is gitignored, so these exist only on the original machine.
 
@@ -83,6 +84,8 @@ All found by the live run, all fixed test-first:
 | `49adc6d` | Any `finish_reason` = `length`/`max_tokens` (empty **or** partial JSON) retries once with 8x `max_tokens`, capped at 32,768 |
 | `a7be0f4` | Every model request has a default 600 s timeout (`DEFAULT_REQUEST_TIMEOUT_S` in `llm/models.py`); a build once hung 38 min on a stalled socket |
 | `efe0c5c` | `write_dataset` removes shards that the previous manifest listed but the new build doesn't write (a stale `validation.parquet` was being picked up by the HF loader); never deletes outside the dataset dir |
+| `cfe431f` | Engine B plans 3 seeds per target record (`SEED_OVERSAMPLE`) and stops once the target is met in **distinct** records (incremental `DedupIndex`, same policy as curation); past the target it generates only for thin aspects, so `adh loop` top-ups still work |
+| follow-up (crawl + quality) | From the rust-async-50 run: (1) live crawls judge **followed** pages with BM25 >= 0.35 against the aspect's topic + keywords (passed via `FetchContext.aspect_terms`) and drop followed pages under 200 tokens while still following their links (`LIVE_CONTENT_THRESHOLD`, `LIVE_MIN_CONTENT_TOKENS` in `runtime.py`; calibrated: kept 11/11 productive followed pages, dropped 50/60 skipped); (2) the duplicate-line check ignores brace-only lines and code fences (Rust answers were rejected for repeated `}`); (3) a generator skip raises `SeedSkipped`: not retried, not escalated, counted as `skipped_grounding`, no longer reported as "generator exhausted" |
 | `2f39028` + follow-up | Goal-aware junk source filtering ([src/adh/junk.py](../src/adh/junk.py)): job boards, crypto trackers, stock-ticker news, company directories, spam. A known junk domain is decisive; otherwise path/text **strong** signals ("apply now", "circulating supply", "(NASDAQ: X)") are needed and **weak** ones ("/jobs/" path, "8 jobs", "stock market") only corroborate; job pages need two signals. A category is exempt when the goal is about it (spam never). Applied to web search hits in heuristic and deep discovery (each skip is a plan note) and to crawler outlinks (known domains, `jobs.`/`careers.` hosts, `/careers/`; pruned as "junk source"). Regression tests pin the live-run junk and six technical look-alikes (Kubernetes Jobs, GitLab CI jobs, ssh-keygen, ...). Ranking tie-break on assessment; license penalty stays 0.5 |
 
 ---
@@ -124,6 +127,7 @@ specs must set `generation_params.max_tokens: 16384`. It is slow: about 3 to 4 m
 ### Immediate (where work stopped)
 1. **Open a PR** for `fix/live-run-quality` into `main` (pushed, PR not yet created): https://github.com/utkrisht26/DatasetHarness/pull/new/fix/live-run-quality
 2. **Confirm the first CI run is green** on the PR. The workflow was written and its lint step checked locally, but the clean-machine install is only exercised on GitHub.
+3. **Re-run the 50-record job with the crawl fixes** (owner asked not to re-run yet). Spec: copy of the rust-async-50 spec (6 Rust async aspects, `target_size.records: 50`, `max_pages_scraped: 140`, `generation_params.max_tokens: 16384`). Re-run Engine A with `--fresh` into a new work dir (or the same one) so the crawl uses the new gates, then `adh build` without `--fresh` keeps the 25 verified records and tops up. Watch `skipped_grounding` and `dropped_quality` in the summary.
 
 ### Dataset quality
 3. **Self-judging:** the generator and the judge are the same model family. The jury once scored a non-answer 5/5/5, and accepted records have shown helpfulness 2.5 carried by clarity 5. Add a judge from a **different model family** to `ADH_JUDGE_MODELS`, and consider a per-dimension floor (not only the mean ≥ `min_score`).
@@ -134,7 +138,7 @@ specs must set `generation_params.max_tokens: 16384`. It is slow: about 3 to 4 m
 
 ### Scale / ops
 8. **`cost_usd` is always null** for OpenRouter responses, so `limits.max_cost_usd` can never trip. Read cost from the provider's usage payload or a price table.
-9. **Bigger run:** 5 records proves the pipeline; a real training set needs a larger `target_size` (and a paid or faster model). Partial-success builds cannot be topped up by re-running `build` (resume skips completed seeds); use `adh loop`.
+9. **Bigger runs:** the free MiniMax model works but is slow (~3–4 min per real generation) and judges its own output. A paid or faster model, and a second judge family, are the next lever after crawl quality.
 10. **No frontend tests**, and the frontend repo has no CI.
 11. **Media:** VLM captioning for video/image records (captions currently come from source metadata); a live Pexels run needs `PEXELS_API_KEY`.
 12. Publishing has **no HTTP route** by design (uploads need an auth layer); CLI only.
