@@ -60,6 +60,26 @@ def test_minhash_pure_fallback_matches_semantics(monkeypatch):
     assert out[1].is_duplicate is True
 
 
+@pytest.mark.parametrize("method", ["exact", "minhash"])
+def test_incremental_index_matches_batch_clustering(method):
+    # Engine B counts distinct records as they are verified; the count must agree
+    # with what curation's batch clustering will later ship.
+    texts = [
+        "the quick brown fox jumps over the lazy dog in the meadow every morning",
+        "the quick brown fox jumps over the lazy dog in the meadow every morning",
+        "the quick brown fox jumps over the lazy dog in the meadow each morning",
+        "completely unrelated content about database indexing and query planners here",
+        "",
+    ]
+    deduper = Deduper(method=method, ngram=5, jaccard=0.6)
+
+    index = deduper.index()
+    incremental = [index.add(t) for t in texts]
+
+    assert incremental == deduper.cluster(texts)
+    assert index.n_distinct == sum(not a.is_duplicate for a in incremental)
+
+
 def test_dedupe_helper_warns_on_global_scope(caplog):
     from adh.contract import DedupPolicy
 

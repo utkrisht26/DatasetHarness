@@ -217,12 +217,23 @@ def test_engine_b_resume_keeps_completed_seeds_with_generation_history(minimal_s
     _seed_corpus(spec, tmp_path)
     first = _run_b(spec, tmp_path)
     assert first.n_records > 0
+    done_first = set(
+        json.loads((tmp_path / "engine_b_state.json").read_text())["completed_seed_ids"]
+    )
     # simulate "everything generated was later dropped": keep bstate, drop the journal
     (tmp_path / "engine_b_verified.jsonl").unlink()
 
-    second = _run_b(spec, tmp_path)
+    class _Recording(HeuristicGenerator):
+        seen: list[str] = []
 
-    assert second.n_records == 0
+        def generate(self, seed, *, spec, store=None):
+            self.seen.append(seed.seed_id)
+            return super().generate(seed, spec=spec, store=store)
+
+    recorder = _Recording()
+    second = _run_b(spec, tmp_path, generator=recorder)
+
+    assert not done_first & set(recorder.seen)  # only never-tried planned seeds run
     assert not any("generated nothing" in n for n in second.notes)
 
 
@@ -259,6 +270,84 @@ def test_engine_b_logs_generation_progress(minimal_spec_dict, tmp_path, caplog):
     assert any("seed(s) to generate" in m for m in msgs)
     progress = [m for m in msgs if "engine B progress" in m]
     assert progress  # at least one per-seed line
+
+
+# --------------------------------------------------------------------- reaching the target
+class _DistinctGenerator:
+    """One distinct candidate per seed (no dedup/novelty collisions); optionally only
+    for every other seed, the way live models skip junk grounding or get rejected."""
+
+    def __init__(self, *, every: int = 1):
+        self.every = every
+        self.calls = 0
+        self._inner = HeuristicGenerator()
+
+    def generate(self, seed, *, spec, store=None):
+        import dataclasses
+        import hashlib
+
+        self.calls += 1
+        if (self.calls - 1) % self.every:
+            return []
+        digest = hashlib.sha256(seed.seed_id.encode()).hexdigest()
+        unique = " ".join(digest[i : i + 2] for i in range(0, 64, 2))  # 32 distinct tokens
+        return [
+            dataclasses.replace(c, input=f"{c.input} ({unique})", output=f"{unique}. {c.output}")
+            for c in self._inner.generate(seed, spec=spec, store=store)
+        ]
+
+
+def test_engine_b_plans_extra_seeds_to_reach_the_target(minimal_spec_dict, tmp_path):
+    # Live run rust-async-live-small: only ~4 in 10 seeds became records (junk skips,
+    # jury rejections), so planning one seed per target record fell far short.
+    spec = _spec(minimal_spec_dict, target_size={"records": 4})
+    _seed_corpus(spec, tmp_path)
+    generator = _DistinctGenerator(every=2)
+
+    result = _run_b(spec, tmp_path, generator=generator)
+
+    assert result.n_records == 4
+    assert generator.calls == 7  # stops on the 4th accepted record, not after every seed
+    assert any("target reached" in n for n in result.notes)
+
+
+def test_engine_b_does_not_count_near_duplicates_toward_the_target(minimal_spec_dict, tmp_path):
+    # Curation ships one record per near-duplicate cluster; stopping on the raw
+    # verified count would end the build short of the target.
+    spec = _spec(minimal_spec_dict, target_size={"records": 3})
+    _seed_corpus(spec, tmp_path)
+
+    class _SameAnswerGenerator(_DistinctGenerator):
+        """Distinct questions, one shared (jury-acceptable) answer."""
+
+        answer: str | None = None
+
+        def generate(self, seed, *, spec, store=None):
+            import dataclasses
+
+            cands = super().generate(seed, spec=spec, store=store)
+            if self.answer is None and cands:
+                self.answer = self._inner.generate(seed, spec=spec, store=store)[0].output
+            return [dataclasses.replace(c, output=self.answer) for c in cands]
+
+    generator = _SameAnswerGenerator()
+    result = _run_b(spec, tmp_path, generator=generator)
+
+    verified = (tmp_path / "engine_b_verified.jsonl").read_text().splitlines()
+    assert len(verified) > 3  # kept going past 3 verified near-duplicates
+    assert result.n_records < len(verified)  # curation ships one per cluster (per split)
+    assert not any("target reached" in n for n in result.notes)
+
+
+def test_engine_b_stops_generating_once_the_target_is_verified(minimal_spec_dict, tmp_path):
+    spec = _spec(minimal_spec_dict, target_size={"records": 3})
+    _seed_corpus(spec, tmp_path)
+    generator = _DistinctGenerator()
+
+    result = _run_b(spec, tmp_path, generator=generator)
+
+    assert result.n_records == 3
+    assert generator.calls == 3  # the extra planned seeds cost nothing when unneeded
 
 
 # --------------------------------------------------------------------- corpus loader
