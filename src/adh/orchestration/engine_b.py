@@ -49,6 +49,7 @@ from adh.generation import (
     CoverageReport,
     NoveltyGate,
     SeedEngine,
+    SeedSkipped,
     build_generator,
     coverage_report,
 )
@@ -202,6 +203,12 @@ def run_engine_b(
         progress=progress,
     )
     notes.extend(state.notes)
+    skipped = state.counters.get("skipped_grounding", 0)
+    if skipped:
+        notes.append(
+            f"generator skipped {skipped}/{len(seeds)} seed(s): grounding not substantive "
+            "(navigation, index or unrelated pages) — improve crawl quality to raise yield"
+        )
     exhausted = getattr(generator, "exhausted", 0)
     if exhausted:
         notes.append(
@@ -346,6 +353,11 @@ def _generate_and_verify(
 
         try:
             cands = generator.generate(seed, spec=spec, store=store)
+        except SeedSkipped:
+            state.counters["skipped_grounding"] += 1
+            state.completed_seed_ids.add(seed.seed_id)
+            _save_bstate(work, state)
+            continue
         except Exception as exc:  # noqa: BLE001 - a failed seed must not kill the run
             logger.warning("generation failed for seed %s: %s", seed.seed_id, exc)
             state.counters["generation_errors"] += 1
@@ -679,6 +691,7 @@ def _counts(state, *, records, duplicates, dead, coverage, pii, metrics) -> dict
     return {
         "generated": generated,
         "generation_errors": state.counters.get("generation_errors", 0),
+        "skipped_grounding": state.counters.get("skipped_grounding", 0),
         "accepted": accepted,
         "accept_rate": (accepted / generated) if generated else 0.0,
         "dropped_novelty": state.counters.get("dropped_novelty", 0),

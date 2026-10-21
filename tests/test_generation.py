@@ -379,14 +379,17 @@ def test_llm_generator_retries_reasoning_truncation_with_more_headroom(caplog, t
 
 
 def test_llm_generator_honors_skip_for_off_topic_context(caplog):
-    """A {"skip": ...} reply is a clean opt-out: no candidate, no corrective re-ask."""
+    """A {"skip": ...} reply is a clean opt-out: SeedSkipped, no corrective re-ask."""
     import json
     import logging
+
+    from adh.generation import SeedSkipped
 
     gen = _scripted_llm([json.dumps({"skip": "context is a job listing, not Rust async"})])
 
     with caplog.at_level(logging.INFO, logger="adh.generation.generator"):
-        assert gen.generate(_one_seed(), spec=_spec(tier=2)) == []
+        with pytest.raises(SeedSkipped, match="job listing"):
+            gen.generate(_one_seed(), spec=_spec(tier=2))
     assert len(gen._model.calls) == 1
     assert any("job listing" in r.getMessage() for r in caplog.records)
 

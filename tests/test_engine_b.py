@@ -350,6 +350,26 @@ def test_engine_b_stops_generating_once_the_target_is_verified(minimal_spec_dict
     assert generator.calls == 3  # the extra planned seeds cost nothing when unneeded
 
 
+def test_engine_b_counts_skipped_seeds_apart_from_errors_and_exhaustion(
+    minimal_spec_dict, tmp_path
+):
+    from adh.generation import SeedSkipped
+
+    spec = _spec(minimal_spec_dict, target_size={"records": 2})
+    _seed_corpus(spec, tmp_path)
+
+    class _Skipping:
+        def generate(self, seed, *, spec, store=None):
+            raise SeedSkipped("navigation page")
+
+    result = _run_b(spec, tmp_path, generator=_Skipping())
+
+    assert result.counts["skipped_grounding"] >= 1
+    assert result.counts["generation_errors"] == 0
+    assert not any("exhausted" in n for n in result.notes)
+    assert any("skipped" in n and "not substantive" in n for n in result.notes)
+
+
 # --------------------------------------------------------------------- corpus loader
 def test_load_corpus_reads_manifest(minimal_spec_dict, tmp_path):
     from adh.corpus import LocalCorpusStore

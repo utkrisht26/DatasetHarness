@@ -33,12 +33,28 @@ from .prompts import generation_prompt, system_prompt
 logger = logging.getLogger(__name__)
 
 
+class SeedSkipped(Exception):  # noqa: N818 - a verdict, not an error
+    """The generator declined a seed because its grounding has nothing to teach.
+
+    A deliberate verdict on the seed (navigation page, job listing, unrelated text),
+    not a provider fault: routing neither retries nor escalates it, and Engine B
+    counts it apart from generation errors and exhausted seeds.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 @runtime_checkable
 class Generator(Protocol):
     def generate(
         self, seed: SeedPoint, *, spec: JobSpec, store: CorpusStore | None = None
     ) -> list[Candidate]:
-        """Produce zero or more candidate records for one seed point."""
+        """Produce zero or more candidate records for one seed point.
+
+        Raises :class:`SeedSkipped` to decline a seed whose grounding is not substantive.
+        """
         ...
 
 
@@ -218,12 +234,13 @@ class LlmGenerator:
             )
             return []
         if "skip" in payload and "input" not in payload:
+            reason = str(payload["skip"])
             logger.info(
                 "generator skipped seed %s (grounding not substantive): %.200s",
                 seed.seed_id,
-                payload["skip"],
+                reason,
             )
-            return []
+            raise SeedSkipped(reason)
         input_text = str(payload.get("input", "")).strip()
         output_text = str(payload.get("output", "")).strip()
         if not input_text or not output_text:
