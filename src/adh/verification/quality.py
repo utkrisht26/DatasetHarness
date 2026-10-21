@@ -15,6 +15,15 @@ from collections import Counter
 from dataclasses import dataclass
 
 _WORD_RE = re.compile(r"\S+")
+_HAS_CONTENT_RE = re.compile(r"\w")
+_CODE_FENCE_RE = re.compile(r"^(?:```|~~~)[\w+#.-]*$")
+
+
+def _is_structural(line: str) -> bool:
+    """A stripped line with no content of its own: punctuation only, or a code fence."""
+    return not _HAS_CONTENT_RE.search(line) or bool(_CODE_FENCE_RE.match(line))
+
+
 # A record that talks about "the provided index" / "the supplied listing" / "this
 # excerpt" is about its grounding document, not the domain — it is meaningless to a
 # reader who never saw that context. "provided"/"supplied" alone are not enough
@@ -94,7 +103,9 @@ class QualityFilter:
         return QualityResult(True, "")
 
     def _dup_line_ratio(self, text: str) -> float:
-        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        # Structural lines (closing braces, code fences) repeat in any code answer;
+        # only lines that carry content count toward repetition.
+        lines = [s for s in (ln.strip() for ln in text.splitlines()) if s and not _is_structural(s)]
         if len(lines) < 2:
             return 0.0
         counts = Counter(lines)

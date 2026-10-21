@@ -79,6 +79,49 @@ def test_quality_accepts_prose():
     assert q.check("This is a natural sentence that a person could plausibly have written.").ok
 
 
+_RUST_ANSWER = """Async closures capture their environment like ordinary closures.
+
+```rust
+async fn run() {
+    let fetch = async |id: u32| {
+        load(id).await
+    };
+    for id in 0..3 {
+        fetch(id).await;
+    }
+}
+```
+
+Each call borrows the environment until its future completes.
+
+```rust
+fn spawn_all() {
+    for task in tasks() {
+        tokio::spawn(async move {
+            task.await;
+        });
+    }
+}
+```
+
+Use `move` when the future must outlive the caller."""
+
+
+def test_quality_accepts_code_answers_whose_only_repeats_are_braces_and_fences():
+    # Live run rust-async-50: 17 records were rejected for duplicate-line ratio
+    # 0.37-0.65; across kept records the repeats were `}`, ``` and ```rust.
+    assert QualityFilter().check(_RUST_ANSWER).ok
+
+
+def test_quality_still_rejects_repeated_content_lines():
+    text = "\n".join(
+        ["Pinning keeps a future at a stable address."] * 4
+        + ["Unpin types can move freely.", "Most futures are not Unpin."]
+    )
+    result = QualityFilter().check(text)
+    assert not result.ok and "duplicate-line" in result.reason
+
+
 @pytest.mark.parametrize(
     "text",
     [
