@@ -54,6 +54,10 @@ JUDGE_MODELS_ENV = SETTINGS_JUDGE_MODELS_ENV
 
 # Backward-compatible default for call sites that do not accept a settings object.
 DEFAULT_CHAT_MODEL = DEFAULT_DISCOVERY_MODEL
+# Per-request ceiling. A stalled upstream response otherwise blocks a run forever
+# (rust-async-live-small hung 38 min); generous because a reasoning model can
+# legitimately think for minutes on a 32k-token completion.
+DEFAULT_REQUEST_TIMEOUT_S = 600.0
 
 
 def env_model_list(env_name: str) -> list[str]:
@@ -78,6 +82,7 @@ def build_chat_model(model_id: str = DEFAULT_CHAT_MODEL, **kwargs: Any) -> "Base
             "Building a chat model requires LangChain; install with: pip install 'adh[agents]'"
         ) from exc
 
+    kwargs.setdefault("timeout", DEFAULT_REQUEST_TIMEOUT_S)
     if "base_url" not in kwargs:
         settings = get_settings()
         if settings.llm_base_url:

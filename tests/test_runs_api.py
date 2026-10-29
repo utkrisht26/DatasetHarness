@@ -417,21 +417,35 @@ def test_build_rejects_invalid_verification_config_before_queuing(
 
 
 def test_double_build_in_flight_is_409(minimal_spec_dict, tmp_path):
-    import time as _time
+    from threading import Event
 
     from adh.generation import HeuristicGenerator
 
-    class SlowGenerator(HeuristicGenerator):
+    generation_started = Event()
+    allow_generation = Event()
+
+    class BlockingGenerator(HeuristicGenerator):
         def generate(self, seed, *, spec, store=None):
-            _time.sleep(0.5)
+            generation_started.set()
+            if not allow_generation.wait(timeout=5):
+                raise TimeoutError("test did not release the blocked generator")
             return super().generate(seed, spec=spec, store=store)
 
-    with _offline_build_client(tmp_path, engine_b_generator=SlowGenerator()) as client:
-        run_id = _run_to_succeeded(client, minimal_spec_dict, target_size={"records": 6})
+    with _offline_build_client(tmp_path, engine_b_generator=BlockingGenerator()) as client:
+        run_id = _run_to_succeeded(
+            client,
+            minimal_spec_dict,
+            target_size={"records": 1},
+            output_format="jsonl",
+        )
         assert client.post(f"/api/runs/{run_id}/build").status_code == 202
-        second = client.post(f"/api/runs/{run_id}/build")
-        assert second.status_code == 409
-        assert "building" in second.json()["detail"]
+        assert generation_started.wait(timeout=5), "build worker never reached generation"
+        try:
+            second = client.post(f"/api/runs/{run_id}/build")
+            assert second.status_code == 409
+            assert "building" in second.json()["detail"]
+        finally:
+            allow_generation.set()
         _await_status(client, run_id, "succeeded")
 
 

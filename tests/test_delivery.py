@@ -70,6 +70,40 @@ def test_write_jsonl_shards_and_manifest(tmp_path):
     assert all("sha256" in s and s["n_records"] >= 1 for s in shard_rows)
 
 
+@pytest.mark.parametrize("fmt", ["jsonl", "parquet"])
+def test_rewrite_removes_shards_the_new_build_no_longer_has(tmp_path, fmt):
+    # Live rebuild of rust-async-live-small: build 2 split train/validation, build 3
+    # split train/test — the stale validation shard stayed on disk, so loading the
+    # folder (HF auto-detects splits) returned a record not in the dataset.
+    if fmt == "parquet":
+        pytest.importorskip("pyarrow")
+    ext = "parquet" if fmt == "parquet" else "jsonl"
+    write_dataset(
+        [_record(0, "train"), _record(1, "validation")], spec=_spec(fmt), out_dir=tmp_path
+    )
+    assert (tmp_path / f"validation.{ext}").exists()
+
+    write_dataset([_record(2, "train"), _record(3, "test")], spec=_spec(fmt), out_dir=tmp_path)
+
+    assert not (tmp_path / f"validation.{ext}").exists()
+    shards = {p.name for p in tmp_path.glob(f"*.{ext}")} - {"manifest.jsonl"}
+    assert shards == {f"train.{ext}", f"test.{ext}"}
+
+
+def test_rewrite_never_deletes_outside_the_dataset_dir(tmp_path):
+    out = tmp_path / "dataset"
+    outside = tmp_path / "keep.jsonl"
+    outside.write_text("precious\n")
+    out.mkdir()
+    (out / "manifest.jsonl").write_text(
+        json.dumps({"kind": "shard", "split": "x", "path": "../keep.jsonl"}) + "\n"
+    )
+
+    write_dataset([_record(0, "train")], spec=_spec("jsonl"), out_dir=out)
+
+    assert outside.read_text() == "precious\n"
+
+
 def test_write_parquet_roundtrips(tmp_path):
     pytest.importorskip("pyarrow")
     import pyarrow.parquet as pq

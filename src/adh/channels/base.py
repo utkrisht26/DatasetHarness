@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Protocol, runtime_checkable
+from typing import Callable, Mapping, Protocol, runtime_checkable
 
 from adh.contract import JobSpec, SourceChannel
 from adh.corpus import CorpusChunk, CorpusStore
@@ -67,6 +67,9 @@ class FetchContext:
     # MEDIA channel only: where content-addressed clip staging lives (the run's
     # ``media_staging`` dir). None for text jobs / channels that don't stage.
     staging_root: Path | None = None
+    # aspect_id -> (topic, *keywords) from the plan: the vocabulary a deep crawl
+    # judges followed pages against. Empty when the caller has no plan.
+    aspect_terms: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 @runtime_checkable

@@ -147,6 +147,57 @@ def _ctx(minimal_spec_dict, tmp_path, *, governor=None, max_items=10) -> FetchCo
     )
 
 
+class _RecordingFetcher:
+    """Constraint-aware fetcher double: records the seed request, fetches nothing."""
+
+    def __init__(self):
+        self.requests: list[CrawlRequest] = []
+
+    def fetch_source(self, request, *, on_result=None):
+        self.requests.append(request)
+        return []
+
+
+def test_web_channel_steers_relevance_by_the_aspect_vocabulary(minimal_spec_dict, tmp_path):
+    # Calibrated on rust-async-50: judged against the aspect's topic + keywords, the
+    # BM25 judge kept 11/11 productive followed pages and dropped 50/60 skipped ones;
+    # the seed's title + snippet query lost a productive page at the same threshold.
+    import dataclasses
+
+    fetcher = _RecordingFetcher()
+    ctx = dataclasses.replace(
+        _ctx(minimal_spec_dict, tmp_path), aspect_terms={"a0": ("rust pin", "unpin", "futures")}
+    )
+
+    WebChannel(fetcher=fetcher).fetch(_ranked("https://blog.dev/pin"), ctx)
+
+    assert fetcher.requests[0].keywords == ("rust pin", "unpin", "futures")
+
+
+def test_live_web_channel_gates_followed_pages_on_relevance_and_length():
+    import pytest
+
+    pytest.importorskip("crawl4ai")
+    pytest.importorskip("rank_bm25")
+    from adh.runtime import live_channels
+
+    fetcher = live_channels()[SourceChannel.WEB].fetcher
+
+    assert isinstance(fetcher.judge, Bm25RelevanceJudge)
+    assert fetcher.content_threshold == 0.35
+    assert fetcher.min_content_tokens == 200
+
+
+def test_web_channel_falls_back_to_source_signal_without_aspect_terms(minimal_spec_dict, tmp_path):
+    fetcher = _RecordingFetcher()
+
+    WebChannel(fetcher=fetcher).fetch(
+        _ranked("https://blog.dev/pin"), _ctx(minimal_spec_dict, tmp_path)
+    )
+
+    assert "https://blog.dev/pin" in fetcher.requests[0].keywords  # the source title
+
+
 # --------------------------------------------------------------------- router: frontier
 def test_single_seed_no_links():
     svc = _SyncFakeService({"https://example.com/root": ("root body", [])})
@@ -416,6 +467,60 @@ def test_locale_filter_is_opt_in_policy():
         "https://docs.dj.com/en/ref/views/",
         "https://docs.dj.com/en/topics/views/",
     ]
+
+
+def test_thin_followed_pages_are_not_kept_but_their_links_are_followed():
+    # Live run rust-async-50: 26 of 63 skipped chunks were under 200 tokens (tag
+    # indexes, help pages, search shells); no productive chunk was under 499.
+    body = " ".join(f"word{i}" for i in range(300))
+    svc = _SyncFakeService(
+        {
+            "https://docs.dj.com/": ("Docs home", ["https://docs.dj.com/tags/"]),  # thin seed
+            "https://docs.dj.com/tags/": ("Tags: views forms", ["https://docs.dj.com/views/"]),
+            "https://docs.dj.com/views/": (body, []),
+        }
+    )
+    events: list[tuple[str, str, dict]] = []
+    router = CrawlRouter(svc, workers=2, max_depth=2)
+
+    pages = router.run_job(
+        CrawlRequest(url="https://docs.dj.com/"),
+        max_pages=10,
+        policy=FrontierPolicy(min_content_tokens=200),
+        on_event=lambda kind, url, data: events.append((kind, url, data)),
+    )
+
+    # the seed is kept however short (it was chosen deliberately); the thin tag page
+    # is not, but the article it links to is reached through it
+    assert sorted(p.url for p in pages) == ["https://docs.dj.com/", "https://docs.dj.com/views/"]
+    pruned = {url: data for kind, url, data in events if kind == "pruned"}
+    assert pruned["https://docs.dj.com/tags/"]["reason"] == "thin content"
+
+
+def test_job_board_outlinks_are_pruned_as_junk_not_job_concepts():
+    """Default policy skips job-board links (reported as junk) but follows CI 'jobs' docs."""
+    svc = _SyncFakeService(
+        {
+            "https://docs.dj.com/ci/": (
+                "ci",
+                [
+                    "https://www.indeed.com/q-ci-jobs.html",  # job board
+                    "https://docs.dj.com/ci/jobs/",  # a technical page about CI jobs
+                ],
+            ),
+            "https://docs.dj.com/ci/jobs/": ("jobs", []),
+        }
+    )
+    events: list[tuple[str, str, dict]] = []
+    router = CrawlRouter(svc, workers=2, max_depth=2)
+    router.run_job(
+        CrawlRequest(url="https://docs.dj.com/ci/"),
+        max_pages=10,
+        on_event=lambda kind, url, data: events.append((kind, url, data)),
+    )
+    assert sorted(svc.crawled) == ["https://docs.dj.com/ci/", "https://docs.dj.com/ci/jobs/"]
+    pruned = {url: data["reason"] for kind, url, data in events if kind == "pruned"}
+    assert pruned == {"https://www.indeed.com/q-ci-jobs.html": "junk source"}
 
 
 def test_best_first_crawls_most_relevant_within_budget():

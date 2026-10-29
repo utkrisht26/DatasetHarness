@@ -36,6 +36,7 @@ from typing import Annotated, Any, Callable
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from adh.contract import DiscoveryMode, JobSpec, SourceChannel
+from adh.junk import is_junk_source
 from adh.llm import TokenUsage, UsageTracker
 from adh.llm.response_logging import (
     bind_model_response_operation,
@@ -1364,9 +1365,20 @@ class DeepAgentDiscoveryAgent:
         if not 0 <= src.aspect_index < len(aspects):
             notes.append(f"skip {src.locator}: bad aspect index {src.aspect_index}")
             return None
-        if channel == SourceChannel.WEB and not domain_allowed(src.locator, spec):
-            notes.append(f"skip {src.locator}: domain not allowed by constraints")
-            return None
+        if channel == SourceChannel.WEB:
+            if not domain_allowed(src.locator, spec):
+                notes.append(f"skip {src.locator}: domain not allowed by constraints")
+                return None
+            junk = is_junk_source(
+                src.locator,
+                title=src.title,
+                snippet=src.snippet,
+                spec=spec,
+                aspect=aspects[src.aspect_index],  # index validated above
+            )
+            if junk:
+                notes.append(f"skip {src.locator}: junk source ({junk.reason})")
+                return None
 
         aspect = aspects[src.aspect_index]
         prefix = "ds" if channel == SourceChannel.DATASETS else "web"

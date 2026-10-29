@@ -27,7 +27,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Callable
 
-from .generator import Generator, LlmGenerator
+from .generator import Generator, LlmGenerator, SeedSkipped
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +85,8 @@ class RoutedGenerator:
         for attempt in range(_TIER_ATTEMPTS):
             try:
                 return generator.generate(seed, spec=spec, store=store)
+            except SeedSkipped:
+                raise  # a verdict on the grounding: every tier would see the same junk
             except Exception as exc:  # noqa: BLE001 - a failed attempt retries, then escalates
                 logger.warning(
                     "generation tier%d attempt %d/%d failed on seed %s: %s",

@@ -44,7 +44,24 @@ def test_build_chat_model_injects_nothing_without_configuration(monkeypatch):
 
     build_chat_model("openai:gpt-4o-mini", temperature=0, max_tokens=16)
     assert seen["model_id"] == "openai:gpt-4o-mini"
-    assert seen["kw"] == {"temperature": 0, "max_tokens": 16}
+    assert "base_url" not in seen["kw"] and "api_key" not in seen["kw"]
+    assert seen["kw"]["temperature"] == 0 and seen["kw"]["max_tokens"] == 16
+
+
+def test_build_chat_model_bounds_every_request_with_a_timeout(monkeypatch):
+    # Live run rust-async-live-small hung 38 min on one stalled upstream response:
+    # with no request timeout the build sat in 'building' forever.
+    seen = _fake_init(monkeypatch)
+
+    build_chat_model("openai:gpt-4o-mini")
+    assert seen["kw"]["timeout"] == adh.llm.models.DEFAULT_REQUEST_TIMEOUT_S
+
+
+def test_explicit_timeout_wins_over_the_default(monkeypatch):
+    seen = _fake_init(monkeypatch)
+
+    build_chat_model("openai:gpt-4o-mini", timeout=30)
+    assert seen["kw"]["timeout"] == 30
 
 
 def test_build_chat_model_routes_through_env_base_url(monkeypatch):

@@ -49,9 +49,12 @@ class Deduper:
         )
 
     def cluster(self, texts: list[str]) -> list[DedupAssignment]:
-        if self.method == "exact":
-            return self._exact([self._norm(t) for t in texts])
-        return self._minhash(texts)
+        index = self.index()
+        return [index.add(t) for t in texts]
+
+    def index(self) -> DedupIndex:
+        """An empty incremental index applying this deduper's policy."""
+        return DedupIndex(self)
 
     def cluster_per_split(self, items: list[tuple[str, str]]) -> list[DedupAssignment]:
         """Cluster ``(split, text)`` pairs independently within each split.
@@ -70,71 +73,76 @@ class Deduper:
                 out[i] = DedupAssignment(f"{split}:{assign.cluster_id}", assign.is_duplicate)
         return [a for a in out if a is not None]
 
-    # ------------------------------------------------------------------ exact
-    def _exact(self, normalized: list[str]) -> list[DedupAssignment]:
-        seen: dict[str, str] = {}
-        out: list[DedupAssignment] = []
-        for text in normalized:
-            digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-            cid = seen.get(digest)
-            if cid is None:
-                cid = f"clu-{digest[:12]}"
-                seen[digest] = cid
-                out.append(DedupAssignment(cid, False))
-            else:
-                out.append(DedupAssignment(cid, True))
-        return out
 
-    # ------------------------------------------------------------------ minhash
-    def _minhash(self, texts: list[str]) -> list[DedupAssignment]:
-        shingles = [self._shingles(self._norm(t)) for t in texts]
-        try:
-            return self._minhash_datasketch(texts, shingles)
-        except ImportError:
-            logger.info("datasketch not installed; using pure-Python near-dedup fallback")
-            return self._minhash_pure(texts, shingles)
+class DedupIndex:
+    """Incremental near-dedup: ``add`` texts one at a time, first seen is the representative.
 
-    def _minhash_datasketch(self, texts, shingles) -> list[DedupAssignment]:
-        from datasketch import MinHash, MinHashLSH
+    Batch :meth:`Deduper.cluster` is this index fed in order, so a running count of
+    distinct texts always agrees with what a later batch clustering would keep.
+    """
 
-        lsh = MinHashLSH(threshold=self.jaccard, num_perm=self.num_perm)
-        cluster_of: dict[int, str] = {}
-        out: list[DedupAssignment] = []
-        for i, sh in enumerate(shingles):
-            if not sh:
-                cid = f"clu-{sha256_hex(texts[i])[:12]}"
-                out.append(DedupAssignment(cid, False))
-                continue
-            m = MinHash(num_perm=self.num_perm)
-            for s in sh:
-                m.update(s.encode("utf-8"))
-            matches = lsh.query(m)
-            if matches:
-                cid = cluster_of[matches[0]]
-                out.append(DedupAssignment(cid, True))
-            else:
-                cid = f"clu-{sha256_hex(texts[i])[:12]}"
-                out.append(DedupAssignment(cid, False))
-            lsh.insert(i, m)
-            cluster_of[i] = cid
-        return out
+    def __init__(self, deduper: Deduper) -> None:
+        self._d = deduper
+        self._n = 0
+        self.n_distinct = 0
+        self._exact_seen: dict[str, str] = {}
+        self._lsh = None
+        self._cluster_of: dict[int, str] = {}
+        self._reps: list[tuple[frozenset[str], str]] = []  # pure-Python fallback
+        if deduper.method != "exact":
+            try:
+                from datasketch import MinHashLSH
 
-    def _minhash_pure(self, texts, shingles) -> list[DedupAssignment]:
-        reps: list[tuple[int, frozenset[str], str]] = []  # (idx, shingles, cluster_id)
-        out: list[DedupAssignment] = []
-        for i, sh in enumerate(shingles):
-            matched: str | None = None
-            for _, rep_sh, cid in reps:
-                if sh and rep_sh and _jaccard(sh, rep_sh) >= self.jaccard:
-                    matched = cid
-                    break
-            if matched is not None:
-                out.append(DedupAssignment(matched, True))
-            else:
-                cid = f"clu-{sha256_hex(texts[i])[:12]}"
-                reps.append((i, sh, cid))
-                out.append(DedupAssignment(cid, False))
-        return out
+                self._lsh = MinHashLSH(threshold=deduper.jaccard, num_perm=deduper.num_perm)
+            except ImportError:
+                logger.info("datasketch not installed; using pure-Python near-dedup fallback")
+
+    def add(self, text: str) -> DedupAssignment:
+        if self._d.method == "exact":
+            assignment = self._add_exact(text)
+        elif self._lsh is not None:
+            assignment = self._add_datasketch(text)
+        else:
+            assignment = self._add_pure(text)
+        self._n += 1
+        self.n_distinct += not assignment.is_duplicate
+        return assignment
+
+    def _add_exact(self, text: str) -> DedupAssignment:
+        digest = hashlib.sha256(self._d._norm(text).encode("utf-8")).hexdigest()
+        cid = self._exact_seen.get(digest)
+        if cid is not None:
+            return DedupAssignment(cid, True)
+        cid = f"clu-{digest[:12]}"
+        self._exact_seen[digest] = cid
+        return DedupAssignment(cid, False)
+
+    def _add_datasketch(self, text: str) -> DedupAssignment:
+        from datasketch import MinHash
+
+        shingles = self._d._shingles(self._d._norm(text))
+        if not shingles:
+            return DedupAssignment(f"clu-{sha256_hex(text)[:12]}", False)
+        m = MinHash(num_perm=self._d.num_perm)
+        for s in shingles:
+            m.update(s.encode("utf-8"))
+        matches = self._lsh.query(m)
+        if matches:
+            assignment = DedupAssignment(self._cluster_of[matches[0]], True)
+        else:
+            assignment = DedupAssignment(f"clu-{sha256_hex(text)[:12]}", False)
+        self._lsh.insert(self._n, m)
+        self._cluster_of[self._n] = assignment.cluster_id
+        return assignment
+
+    def _add_pure(self, text: str) -> DedupAssignment:
+        shingles = self._d._shingles(self._d._norm(text))
+        for rep_sh, cid in self._reps:
+            if shingles and rep_sh and _jaccard(shingles, rep_sh) >= self._d.jaccard:
+                return DedupAssignment(cid, True)
+        cid = f"clu-{sha256_hex(text)[:12]}"
+        self._reps.append((shingles, cid))
+        return DedupAssignment(cid, False)
 
 
 def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:

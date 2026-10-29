@@ -162,6 +162,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
         f"  dropped:      quality={c.get('dropped_quality', 0)} verifier={c.get('dropped_verifier', 0)} "
         f"jury={c.get('dropped_jury', 0)} dup={c.get('duplicates', 0)} dead={c.get('dead_lettered', 0)}"
     )
+    print(f"  skipped:      {c.get('skipped_grounding', 0)} seed(s) with non-substantive grounding")
     print(f"  metrics:      {result.metrics.to_dict()}")
     print(f"  dataset:      {result.dataset_dir}  ({result.delivery.format})")
     if result.docs:

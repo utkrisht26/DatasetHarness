@@ -118,6 +118,29 @@ def test_all_tiers_exhausted_returns_empty_and_counts_it(minimal_spec_dict):
     assert routed.exhausted == 1
 
 
+def test_a_skip_is_final_not_an_exhausted_or_escalated_seed(minimal_spec_dict):
+    # Live run rust-async-50 reported "generator exhausted 71/150 seed(s) — check
+    # provider health" when every one of those was a deliberate junk-grounding skip.
+    import pytest
+
+    from adh.generation import SeedSkipped
+
+    class Skipper(FakeGen):
+        def generate(self, seed, *, spec, store=None):
+            self.asked.append(seed)
+            raise SeedSkipped("navigation page")
+
+    cheap, frontier = Skipper("cheap"), FakeGen("frontier")
+    routed = RoutedGenerator(tiers=(cheap, frontier))
+
+    with pytest.raises(SeedSkipped, match="navigation page"):
+        routed.generate(_seed(sid="s7"), spec=_spec(minimal_spec_dict))
+
+    assert len(cheap.asked) == 1  # no retries: a skip is a verdict, not a fault
+    assert frontier.asked == []  # the grounding is junk for every tier
+    assert routed.exhausted == 0 and routed.escalations == 0
+
+
 def test_single_tier_ladder_degenerates_to_plain_dispatch(minimal_spec_dict):
     only = FakeGen("only", {"s6": [_cand(_seed(sid="s6"))]})
     routed = RoutedGenerator(tiers=(only,))

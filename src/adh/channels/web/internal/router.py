@@ -31,6 +31,9 @@ import threading
 from dataclasses import dataclass, field, replace
 from typing import Callable, Protocol
 
+from adh.junk import is_junk_url
+from adh.provenance import approx_token_count
+
 from .contracts import CrawlRequest, CrawlResponse
 from .policy import FrontierPolicy
 
@@ -286,6 +289,20 @@ class CrawlRouter:
                     )
                 return  # drop the page and do not expand its links
         resp = replace(resp, relevance_score=relevance)
+        # Thin-content gate (followed pages only): too little text to ground on, but
+        # navigation pages are how the crawl reaches articles, so expand the links.
+        if req.depth > 0 and job.policy.min_content_tokens > 0:
+            n_tokens = approx_token_count(resp.markdown)
+            if n_tokens < job.policy.min_content_tokens:
+                if job.on_event:
+                    job.on_event(
+                        "pruned",
+                        req.url,
+                        {"reason": "thin content", "tokens": n_tokens, "depth": req.depth},
+                    )
+                if req.depth < job.max_depth and len(job.results) < job.max_pages:
+                    self._enqueue_outlinks(job, req, resp)
+                return
         if len(job.results) >= job.max_pages:  # a peer worker may have filled it
             return
         job.results.append(resp)
@@ -319,7 +336,9 @@ class CrawlRouter:
             if not policy.link_filter(link.url, job.seed):
                 if job.on_event:
                     reason = "domain filter"
-                    if job.seed.allowed_locales:
+                    if is_junk_url(link.url, keywords=job.seed.keywords):
+                        reason = "junk source"
+                    elif job.seed.allowed_locales:
                         import re
                         from urllib.parse import urlparse
 

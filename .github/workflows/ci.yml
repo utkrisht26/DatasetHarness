@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Every extra the test suite imports. Left out: `evals` (sentence-transformers
+  # pulls in torch) and `webvideo` (yt-dlp) — their tests skip without them.
+  ADH_TEST_EXTRAS: >-
+    --extra web --extra datasets --extra media --extra agents --extra search
+    --extra verify --extra dedup --extra deliver --extra serve --extra publish
+    --extra pii
+  # Presidio's default NLP engine; spaCy models are not on PyPI.
+  SPACY_MODEL_URL: https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl
+
+jobs:
+  lint:
+    name: Lint (pre-commit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install dev tools
+        run: uv sync --locked --only-dev
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+      - name: Run pre-commit (ruff check, ruff format, file hygiene)
+        run: uv run --no-sync pre-commit run --all-files --show-diff-on-failure
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install project, extras and dev dependencies
+        run: uv sync --locked $ADH_TEST_EXTRAS
+      - name: Install the spaCy model Presidio needs
+        run: uv pip install "$SPACY_MODEL_URL"
+      - name: Run test suite
+        # --no-sync: a plain `uv run` would re-sync and could drop the spaCy model.
+        run: uv run --no-sync pytest -q

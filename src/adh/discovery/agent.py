@@ -29,6 +29,7 @@ from adh.contract import (
     resolved_media_types,
 )
 from adh.contract.licenses import normalize_license
+from adh.junk import is_junk_source
 from adh.llm import AspectDraft, HeuristicLLMProvider, LLMProvider
 from adh.search import (
     DatasetHit,
@@ -116,6 +117,7 @@ class SourceDiscoveryAgent:
                 aspect,
                 spec,
                 queries=query_plan[aspect.aspect_id],
+                notes=notes,
             )
             if channel == SourceChannel.SYNTHESIS:
                 synthesis_aspects.append(aspect)
@@ -147,12 +149,15 @@ class SourceDiscoveryAgent:
         """
         job_id = spec.job_id or spec.name
         seen = {s.candidate.locator for s in existing.sources}
-        _, fresh = self._route_aspect(aspect, spec, exclude_locators=seen)
+        skipped: list[str] = []
+        _, fresh = self._route_aspect(aspect, spec, exclude_locators=seen, notes=skipped)
         merged = list(existing.sources) + [s for s in fresh if s.candidate.locator not in seen]
         merged = self._dedupe_and_rank(merged)
-        notes = list(existing.notes) + [
-            f"re-discovery for aspect {aspect.aspect_id!r}: +{len(fresh)} candidate(s)"
-        ]
+        notes = (
+            list(existing.notes)
+            + [f"re-discovery for aspect {aspect.aspect_id!r}: +{len(fresh)} candidate(s)"]
+            + [n for n in skipped if n not in existing.notes]
+        )
         return FetchPlan(
             job_id=job_id,
             sources=tuple(merged),
@@ -252,8 +257,11 @@ class SourceDiscoveryAgent:
         *,
         exclude_locators: set[str] | None = None,
         queries: tuple[str, ...] | None = None,
+        notes: list[str] | None = None,
     ) -> tuple[SourceChannel, list[RankedSource]]:
         """Route one aspect to a channel and return its evaluated sources.
+
+        Skipped candidates are explained in ``notes`` (the plan's notes) when given.
 
         Reuse > crawl > synthesize, each gated by a shape-match threshold.
         """
@@ -293,7 +301,9 @@ class SourceDiscoveryAgent:
 
         # 2) web channel (crawl when no ready dataset)
         if SourceChannel.WEB in channels:
-            web = self._web_for(aspect, draft, spec, exclude, planned_queries)
+            web = self._web_for(
+                aspect, draft, spec, exclude, planned_queries, notes if notes is not None else []
+            )
             passing = [
                 s for s in web if s.evaluation.shape_match >= self.config.web_shape_threshold
             ]
@@ -341,11 +351,20 @@ class SourceDiscoveryAgent:
         spec: JobSpec,
         exclude: set[str],
         queries: tuple[str, ...],
+        notes: list[str],
     ) -> list[RankedSource]:
         out: list[RankedSource] = []
         for query in queries:
             for hit in self.search.search(query, limit=self.config.max_candidates_per_aspect):
                 if hit.url in exclude or not self._domain_allowed(hit.url, spec):
+                    continue
+                junk = is_junk_source(
+                    hit.url, title=hit.title, snippet=hit.snippet, spec=spec, aspect=aspect
+                )
+                if junk:
+                    note = f"skip {hit.url}: junk source ({junk.reason})"
+                    if note not in notes:  # the same hit recurs across an aspect's queries
+                        notes.append(note)
                     continue
                 cand = CandidateSource(
                     source_id=f"{aspect.aspect_id}:web:{hit.url}",
@@ -531,9 +550,15 @@ def dedupe_and_rank(sources: list[RankedSource]) -> list[RankedSource]:
     best: dict[str, RankedSource] = {}
     for s in sources:
         key = s.candidate.locator
-        if key not in best or s.evaluation.score > best[key].evaluation.score:
+        if key not in best or _rank_key(s) > _rank_key(best[key]):
             best[key] = s
-    return sorted(best.values(), key=lambda s: s.evaluation.score, reverse=True)
+    return sorted(best.values(), key=_rank_key, reverse=True)
+
+
+def _rank_key(s: RankedSource) -> tuple[float, float, float, int]:
+    """Score first; ties (e.g. several clamped to 0.0 by penalties) by assessment."""
+    e = s.evaluation
+    return (e.score, e.shape_match, e.quality, e.estimated_yield)
 
 
 def fixed_plan(spec: JobSpec, job_id: str, notes: list[str]) -> FetchPlan:

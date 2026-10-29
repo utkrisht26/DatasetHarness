@@ -26,6 +26,7 @@ OPENVERSE_API_KEY_ENV = "OPENVERSE_API_KEY"
 SERVICE_API_KEY_ENV = "ADH_API_KEY"
 CORS_ORIGINS_ENV = "ADH_CORS_ORIGINS"
 LOG_LEVEL_ENV = "ADH_LOG_LEVEL"
+PII_ENTITIES_ENV = "ADH_PII_ENTITIES"
 
 DEFAULT_DISCOVERY_MODEL = "openai:gpt-4o-mini"
 DEFAULT_LOG_LEVEL = "INFO"
@@ -63,6 +64,12 @@ class Settings(BaseModel):
     service_api_key: SecretStr | None = None
     cors_origins: tuple[str, ...] = ()
     log_level: str = DEFAULT_LOG_LEVEL
+    pii_entities: tuple[str, ...] = ()
+
+    @field_validator("pii_entities")
+    @classmethod
+    def _upper_case_pii_entities(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(value.upper() for value in values)
 
     @field_validator("discovery_model")
     @classmethod
@@ -124,6 +131,7 @@ class Settings(BaseModel):
             service_api_key=_optional(source.get(SERVICE_API_KEY_ENV)),
             cors_origins=_csv(source.get(CORS_ORIGINS_ENV)),
             log_level=_optional(source.get(LOG_LEVEL_ENV)) or DEFAULT_LOG_LEVEL,
+            pii_entities=_csv(source.get(PII_ENTITIES_ENV)),
         )
 
     @staticmethod

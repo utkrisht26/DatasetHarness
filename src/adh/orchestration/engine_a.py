@@ -370,12 +370,15 @@ def _acquire(
         clock=wallclock,
         governor=governor,
         staging_root=work / "media_staging",
+        aspect_terms={a.aspect_id: (a.topic, *a.keywords) for a in approved.aspects},
     )
 
+    pending_ids = [s.source_id for s in approved.sources if not state.is_done(s.source_id)]
     for source in approved.sources:
         sid = source.source_id
         if state.is_done(sid):
             continue  # resume: already fetched
+        remaining_sources = len(pending_ids) - pending_ids.index(sid)
 
         if should_cancel is not None and should_cancel():
             exit_reason = "cancelled"
@@ -405,7 +408,12 @@ def _acquire(
 
         # The channel reports acquired content to the governor as it fetches (and
         # flushes its own frontier mid-crawl once an aspect saturates).
-        fetched = channel.fetch(source, fetch_ctx)
+        per_source = _fair_share(
+            spec.limits.max_pages_scraped - metrics.pages_scraped,
+            remaining_sources,
+            ceiling=max_items_per_source,
+        )
+        fetched = channel.fetch(source, replace(fetch_ctx, max_items_per_source=per_source))
         chunks.extend(fetched)
         metrics = metrics.add_pages(len(fetched))
         state.mark_done(sid)
@@ -482,6 +490,19 @@ class _SaturationGovernor:
     def should_stop(self, aspect_id: str) -> bool:
         tracker = self.trackers.get(aspect_id)
         return tracker is not None and tracker.is_saturated()
+
+
+def _fair_share(remaining_pages: int, remaining_sources: int, *, ceiling: int) -> int:
+    """Pages one source may fetch: its even split of the budget still unspent.
+
+    Recomputed before every source, so budget a thin source leaves unused flows to
+    the ones after it, and no single deep crawl can starve the rest of the plan or
+    overshoot ``max_pages_scraped`` (the breaker only checks *between* sources).
+    """
+    if remaining_pages <= 0:
+        return 0
+    share = -(-remaining_pages // max(remaining_sources, 1))  # ceil division
+    return max(1, min(ceiling, share, remaining_pages))
 
 
 def _storage_mb(store: CorpusStore, job_id: str) -> float:

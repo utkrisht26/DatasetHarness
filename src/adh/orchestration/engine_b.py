@@ -49,6 +49,7 @@ from adh.generation import (
     CoverageReport,
     NoveltyGate,
     SeedEngine,
+    SeedSkipped,
     build_generator,
     coverage_report,
 )
@@ -68,6 +69,11 @@ from .run_store import load_plan
 from .state import atomic_write_text
 
 logger = logging.getLogger(__name__)
+
+# Seeds planned per target record. Live runs keep ~4 in 10 seeds (junk grounding is
+# skipped, the jury rejects some), so one seed per record falls far short. Generation
+# stops once the target is verified, so unneeded seeds cost nothing.
+SEED_OVERSAMPLE = 3
 
 
 @dataclass
@@ -154,15 +160,17 @@ def run_engine_b(
         aspects=aspects,
         chunks=chunks,
         handoffs=handoffs,
-        n_seeds=n_seeds or target,
+        n_seeds=n_seeds or target * SEED_OVERSAMPLE,
         spec=spec,
     )
 
     # ---- durable state + prior verified candidates ----
     state = _load_bstate(work, job_id, resume)
     kept: list[tuple[Candidate, Verdict]] = _load_verified(verified_path) if resume else []
+    progress = _TargetProgress(spec, aspects, target)
     for cand, _ in kept:
         novelty.is_novel(_novelty_key(cand))  # re-prime so resume keeps the diversity gate honest
+        progress.add(cand)
     if kept:
         notes.append(f"resumed: {len(kept)} verified candidate(s) from prior run")
     if resume and not kept and state.completed_seed_ids and not state.counters.get("generated"):
@@ -192,8 +200,15 @@ def run_engine_b(
         breaker=breaker,
         work=work,
         clock_seconds=clock_seconds,
+        progress=progress,
     )
     notes.extend(state.notes)
+    skipped = state.counters.get("skipped_grounding", 0)
+    if skipped:
+        notes.append(
+            f"generator skipped {skipped}/{len(seeds)} seed(s): grounding not substantive "
+            "(navigation, index or unrelated pages) — improve crawl quality to raise yield"
+        )
     exhausted = getattr(generator, "exhausted", 0)
     if exhausted:
         notes.append(
@@ -296,18 +311,36 @@ def _generate_and_verify(
     breaker,
     work,
     clock_seconds,
+    progress: _TargetProgress,
 ) -> str | None:
     start = clock_seconds()
     total = len(seeds)
     done_before = sum(1 for s in seeds if s.seed_id in state.completed_seed_ids)
     logger.info(
-        "engine B: %d seed(s) to generate (%d already complete)",
+        "engine B: %d seed(s) to generate (%d already complete), stopping at %d distinct record(s)",
         total - done_before,
         done_before,
+        progress.target,
     )
     for seed in seeds:
         if seed.seed_id in state.completed_seed_ids:
             continue
+        if progress.reached():
+            thin = progress.thin_aspects()
+            if not thin:
+                _note_once(
+                    state,
+                    f"target reached: {progress.distinct} distinct record(s) after "
+                    f"{done_before}/{total} seed(s); the remaining seeds were not needed",
+                )
+                _save_bstate(work, state)
+                return None
+            if seed.aspect_id not in thin:
+                continue  # left unmarked: a later build may still need it
+            _note_once(
+                state,
+                f"target reached; generating only for thin aspect(s): {', '.join(thin)}",
+            )
         metrics = _metrics_now(state.base_metrics, usage)
         trip = breaker.check(
             metrics,
@@ -320,6 +353,11 @@ def _generate_and_verify(
 
         try:
             cands = generator.generate(seed, spec=spec, store=store)
+        except SeedSkipped:
+            state.counters["skipped_grounding"] += 1
+            state.completed_seed_ids.add(seed.seed_id)
+            _save_bstate(work, state)
+            continue
         except Exception as exc:  # noqa: BLE001 - a failed seed must not kill the run
             logger.warning("generation failed for seed %s: %s", seed.seed_id, exc)
             state.counters["generation_errors"] += 1
@@ -350,6 +388,7 @@ def _generate_and_verify(
                     state.notes.append(note)
                 continue
             kept.append((cand, verdict))
+            progress.add(cand)
             _append_verified(verified_path, cand, verdict)
         state.completed_seed_ids.add(seed.seed_id)
         _save_bstate(work, state)
@@ -422,16 +461,7 @@ def _curate(kept, *, spec, schema, schema_base_dir, redactor=None, notes=None):
 
     decon = Decontaminator.from_paths(spec.decontaminate_against, base_dir=schema_base_dir)
     media_modality = is_media_modality(spec.modality)
-    if media_modality:
-        # MinHash degenerates on short captions, and identical captions over
-        # different assets ARE training signal — cluster on asset identity instead.
-        deduper = Deduper(method="exact")
-    else:
-        deduper = Deduper(
-            method=spec.dedup_policy.method,
-            ngram=spec.dedup_policy.ngram,
-            jaccard=spec.dedup_policy.jaccard,
-        )
+    deduper = _job_deduper(spec)
     contaminated_flags = [
         decon.is_contaminated(c.output) or decon.is_contaminated(c.input) for c, _ in survivors
     ]
@@ -582,6 +612,54 @@ def _novelty_key(cand: Candidate) -> str:
     return cand.media.sha256 if cand.media is not None else cand.input
 
 
+def _note_once(state, note: str) -> None:
+    if note not in state.notes:
+        state.notes.append(note)
+
+
+def _job_deduper(spec: JobSpec) -> Deduper:
+    """The near-dedup curation applies; generation counts progress with the same one."""
+    if is_media_modality(spec.modality):
+        # MinHash degenerates on short captions, and identical captions over
+        # different assets ARE training signal — cluster on asset identity instead.
+        return Deduper(method="exact")
+    return Deduper(
+        method=spec.dedup_policy.method,
+        ngram=spec.dedup_policy.ngram,
+        jaccard=spec.dedup_policy.jaccard,
+    )
+
+
+class _TargetProgress:
+    """Distinct verified records per aspect, measured against the build target.
+
+    Counts what curation will ship (one per near-duplicate cluster), not raw verified
+    candidates, so a build never stops short on duplicates. Clustering here is across
+    splits, which is at least as strict as curation's per-split clustering.
+    """
+
+    def __init__(self, spec: JobSpec, aspects: tuple[Aspect, ...], target: int) -> None:
+        self.target = target
+        self._aspects = aspects
+        self._media = is_media_modality(spec.modality)
+        self._index = _job_deduper(spec).index()
+        self._aspect_ids: list[str] = []
+
+    def add(self, cand: Candidate) -> None:
+        if not self._index.add(_dedup_text(cand, self._media)).is_duplicate:
+            self._aspect_ids.append(cand.aspect_id)
+
+    @property
+    def distinct(self) -> int:
+        return len(self._aspect_ids)
+
+    def reached(self) -> bool:
+        return bool(self.target) and self.distinct >= self.target
+
+    def thin_aspects(self) -> tuple[str, ...]:
+        return coverage_report(self._aspect_ids, self._aspects, self.target).thin_aspects
+
+
 def _dedup_text(cand: Candidate, media_modality: bool) -> str:
     """The string dedup clusters on: media sha for media jobs, output text otherwise."""
     if media_modality and cand.media is not None:
@@ -613,6 +691,7 @@ def _counts(state, *, records, duplicates, dead, coverage, pii, metrics) -> dict
     return {
         "generated": generated,
         "generation_errors": state.counters.get("generation_errors", 0),
+        "skipped_grounding": state.counters.get("skipped_grounding", 0),
         "accepted": accepted,
         "accept_rate": (accepted / generated) if generated else 0.0,
         "dropped_novelty": state.counters.get("dropped_novelty", 0),

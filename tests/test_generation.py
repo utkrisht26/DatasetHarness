@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 
 from adh.contract import SourceChannel, VerifiabilityTier
 from adh.corpus import CorpusChunk, SynthesisHandoff
@@ -327,6 +329,79 @@ def test_llm_generator_gives_up_after_one_reask(caplog):
     # the surrender names the seed AND shows what the model actually said
     heads = [r for r in caplog.records if "unparseable" in r.message]
     assert heads and "still no json here" in heads[-1].getMessage()
+
+
+@pytest.mark.parametrize(
+    "truncated",
+    [
+        "",  # all budget spent reasoning (live, max_tokens=1024 and 8192)
+        '{"input":"Explain Rust\'s async execution model for an expert',  # cut mid-JSON
+    ],
+)
+def test_llm_generator_retries_reasoning_truncation_with_more_headroom(caplog, truncated):
+    """Live runs: a reasoning model hit max_tokens (finish_reason 'length') with no
+    content, or mid-way through the JSON; the JSON-correction re-ask at the same
+    budget failed identically. Truncation must instead retry with a larger budget."""
+    import json
+    import logging
+
+    class _Reply:
+        def __init__(self, content, finish_reason):
+            self.content = content
+            self.response_metadata = {"finish_reason": finish_reason}
+
+    class _BudgetModel:
+        def __init__(self):
+            self.calls = []
+            self.replies = [
+                _Reply(truncated, "length"),
+                _Reply(
+                    json.dumps({"input": "What does Pin guarantee?", "output": "No moves."}), "stop"
+                ),
+            ]
+
+        def invoke(self, messages, **params):
+            self.calls.append((list(messages), params))
+            return self.replies.pop(0)
+
+    gen = _scripted_llm([])
+    gen._model = _BudgetModel()
+    spec = _spec(tier=2, generation_params={"max_tokens": 16384})
+
+    with caplog.at_level(logging.WARNING, logger="adh.generation.generator"):
+        cands = gen.generate(_one_seed(), spec=spec)
+
+    assert len(cands) == 1
+    (first_msgs, first), (retry_msgs, retry) = gen._model.calls
+    assert retry["max_tokens"] > first.get("max_tokens", 0)
+    assert retry_msgs == first_msgs  # same prompt, not the JSON-correction turn
+    assert any("max_tokens" in r.getMessage() for r in caplog.records)
+
+
+def test_llm_generator_honors_skip_for_off_topic_context(caplog):
+    """A {"skip": ...} reply is a clean opt-out: SeedSkipped, no corrective re-ask."""
+    import json
+    import logging
+
+    from adh.generation import SeedSkipped
+
+    gen = _scripted_llm([json.dumps({"skip": "context is a job listing, not Rust async"})])
+
+    with caplog.at_level(logging.INFO, logger="adh.generation.generator"):
+        with pytest.raises(SeedSkipped, match="job listing"):
+            gen.generate(_one_seed(), spec=_spec(tier=2))
+    assert len(gen._model.calls) == 1
+    assert any("job listing" in r.getMessage() for r in caplog.records)
+
+
+def test_grounded_prompt_demands_standalone_records_and_offers_skip():
+    from adh.generation.prompts import generation_prompt
+
+    prompt = generation_prompt(_one_seed(), _spec(tier=2), grounding="Tokio steals tasks.")
+    assert "standalone" in prompt
+    assert '"skip"' in prompt
+    # the old wording made the context the *subject* of the record
+    assert "Ground the record ONLY in this source context" not in prompt
 
 
 def test_llm_generator_clean_json_needs_no_reask():

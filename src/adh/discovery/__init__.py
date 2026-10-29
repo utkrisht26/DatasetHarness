@@ -26,6 +26,7 @@ from .models import (
     RankedSource,
     SourceEvaluation,
 )
+from adh.junk import JunkVerdict, is_junk_source, is_junk_url
 
 __all__ = [
     "DiscoveryAgent",
@@ -48,4 +49,7 @@ __all__ = [
     "ThresholdApprover",
     "apply_decision",
     "render_plan",
+    "is_junk_source",
+    "is_junk_url",
+    "JunkVerdict",
 ]

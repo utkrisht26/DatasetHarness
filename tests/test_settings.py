@@ -46,6 +46,12 @@ def test_environment_lists_urls_and_secrets_are_normalized() -> None:
     assert settings.log_level == "DEBUG"
 
 
+def test_pii_entities_are_parsed_and_upper_cased() -> None:
+    assert get_settings({}).pii_entities == ()
+    settings = Settings.from_env({"ADH_PII_ENTITIES": " person, email_address ,,"})
+    assert settings.pii_entities == ("PERSON", "EMAIL_ADDRESS")
+
+
 @pytest.mark.parametrize(
     "environment",
     [
